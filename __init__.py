@@ -13,29 +13,64 @@ import control as cm
 from scipy.io import loadmat
 from warnings import warn
 import matplotlib.pyplot as plt
+import pdb
 
 
-# def plot_multiple_bodes(Hplants, iin, iout, vwinds=None, azis=None, omega_limits=[1e-3, 1e3],
-#                         omega_num=1e5, dB=True, Hz=True, show_margins=False, show_nyquist=False,
-#                         fig=None, axs=None, colors='b', linestyle='-', show_legend=True):
-#   """
-#   plot in a single graph multiple plots, note that the Hplants, are all made into a gigantic plot
-#   """
-#   for Hplant in Hplants:
-#     for vwind in vwinds:
+def load_multiple_models(files, dirname='', states_to_ignore=[], vwinds_wanted=None,
+                         azis_wanted=None):
+  """
+  get a list of plant linearizations
+  """
+  if isinstance(files, str):
+    files = [files,]
 
-#       for azi in azis:
+  Hplants_list = []
+  for file in files:
+    Hplants, vwinds, azis = load_state_space_model(file, dirname=dirname,
+                                                   states_to_ignore=states_to_ignore)
 
-#         label = "{}, Wind={:0.1f}, Azi={:0.1f}".format(Hplant.filename, vwind, azi)
-#         plot_siso_bode(Hplant, iin, iout, )
+    if vwinds_wanted is None:
+      vwinds_wanted = vwinds.copy()
+
+    if azis_wanted is None:
+      azis_wanted = azis.copy()
+
+    for vwind_wanted in vwinds_wanted:
+      iwind = get_closest_index(vwinds, vwind_wanted)
+      for azi_wanted in azis_wanted:
+        iazi = get_closest_index(azis, azi_wanted)
+
+        Hplants_list.append(Hplants[iwind, iazi])
+
+  return Hplants_list
 
 
-#   pass
+def plot_multiple_bodes(Hplants_list, inputname, outputname, split=False, show_nyquist=False):
+  """
+  plot multiple siso bodes
+  """
+  fig = None
+  axs = None
+  colors = aux.jetmod(len(Hplants_list), 'vector', bright=True)
+  for color, Hplant in zip(colors, Hplants_list):
+    iin = substr2index(inputname, Hplant.inputnames)
+    iout = substr2index(outputname, Hplant.outputnames)
+    label = "wind = {:0.1f}, azi = {:0.1f} [deg] ({})".format(Hplant.wind_speed,
+                                                              np.rad2deg(Hplant.azimuth),
+                                                              Hplant.filename)
+    if split:
+      fig = None
+      axs = None
+    fig, axs, lines, texts = plot_bode(Hplant, iin, iout, fig=fig, axs=axs, color=color,
+                                       show_legend=True, label=label,
+                                       show_nyquist=show_nyquist)
+
+  return fig, axs
 
 
-def plot_siso_bode(Hplant, iin, iout, omega_limits=[1e-3, 1e3], omega_num=1e5, dB=True, Hz=True,
-                   show_margins=False, show_nyquist=False, fig=None, axs=None, color='b',
-                   linestyle='-', show_legend=True, label=None):
+def plot_bode(Hplant, iin, iout, omega_limits=[1e-3, 1e3], omega_num=1e5, dB=True, Hz=True,
+              show_margins=False, show_nyquist=False, fig=None, axs=None, color='b',
+              linestyle='-', show_legend=True, label=None):
   """
   plot a single bode plot
   """
@@ -60,8 +95,7 @@ def plot_siso_bode(Hplant, iin, iout, omega_limits=[1e-3, 1e3], omega_num=1e5, d
     axs[1].grid(True)
     axs[1].axhline(-180, color='k', linestyle=':')
 
-  if show_nyquist:
-    if fig is None:
+    if show_nyquist:
       axs.append(fig.add_subplot(gs[:, 1]))
       axs[2].set_title("Nyquist plot")
       axs[2].grid(True)
@@ -88,6 +122,12 @@ def plot_siso_bode(Hplant, iin, iout, omega_limits=[1e-3, 1e3], omega_num=1e5, d
   mags, phs, omegas = cm.bode_plot(Hsiso_this, dB=True, Hz=True, Plot=False,
                                    omega_limits=[1e-4, 1e2], omega_num=1e4)
 
+  # # bring phases to between -180 and 180
+  # phs = np.angle(np.exp(1j*phs))
+  # # bring phases between -360 and 0
+  # iabove0 = np.nonzero(phs > 0.)
+  # phs[iabove0] -= 2*np.pi
+
   lines = []
   texts = []
   # convert phs to interval -inf, 0 to be able to verify the phase margins correctly
@@ -96,39 +136,38 @@ def plot_siso_bode(Hplant, iin, iout, omega_limits=[1e-3, 1e3], omega_num=1e5, d
   line_ = axs[0].semilogx(omegas/(2*np.pi), cm.mag2db(mags), "-", label=label, color=color,
                           linestyle=linestyle)
   lines.append(line_)
-  line_ = axs[1].semilogx(omegas/(2*np.pi), np.rad2deg(phs), "-", label=label, color=color,
-                          linestyle=linestyle)
+  line_ = axs[1].semilogx(omegas/(2*np.pi), np.rad2deg(phs), "-", label=label,
+                          color=color, linestyle=linestyle)
   lines.append(line_)
 
   gm_, pm_, sm_, wg_, wp_, ws_ = cm.stability_margins(Hsiso_this, returnall=True)
 
   for wg__, gm__ in zip(wg_, gm_):
     gmdb = cm.mag2db(gm__)
-    va = 'bottom' if gmdb < 0 else 'top'
     wghz = wg__/(2*np.pi)
     line_ = axs[0].plot(wghz*np.array([1., 1.]), [0., -gmdb], ':', color=color)
     lines.append(line_)
-    text_ = axs[0].text(wghz, -gmdb, "{:0.0f}".format(-gmdb), ha='center', va=va, fontsize=7,
-                        fontweight='bold', color=color)
+    text_ = axs[0].text(wghz, -gmdb/2, "{:0.0f}".format(-gmdb), ha='center', va='center',
+                        fontsize=7, fontweight='bold', color=color, backgroundcolor='w',
+                        bbox={'pad': 0.1, 'color': 'w'})
     texts.append(text_)
 
   for wp__, pm__ in zip(wp_, pm_):
     # check if it is relative to -180 or +180
-    va = 'bottom' if pm__ > 0 else 'top'
+    iomega = get_closest_index(omegas, wp__)
+    nof_folds = np.abs(np.fix(phs[iomega]/(2*np.pi)))
+
+    offset = -(nof_folds*2. + 1.)*180.
+
     wphz = wp__/(2*np.pi)
-    line_ = axs[1].plot(wphz*np.array([1., 1.]), -180. + np.array([0., pm__]), ':',
+    line_ = axs[1].plot(wphz*np.array([1., 1.]), [offset + pm__, -180], ':',
                         color=color)
-    text_ = axs[1].text(wphz, -180. + pm__, "{:0.0f}".format(pm__), ha='center', va=va, fontsize=7,
-                        fontweight='bold', color=color)
+    text_ = axs[1].text(wphz, (offset + pm__)/2 - 90., "{:0.0f}".format(pm__),
+                        ha='center', va='center', fontsize=7, fontweight='bold', color=color,
+                        bbox={'pad': 0.1, 'color': 'w'})
 
     lines.append(line_)
     texts.append(text_)
-
-  # nyquist
-  print("{:s}:".format(label))
-  print("  gain margin = {} at {} Hz".format(gm_, wg_))
-  print("  phase margin = {} at {} Hz\n".format(pm_, wp_))
-  print("  stability margin = {} at {} Hz\n".format(sm_, ws_))
 
   if show_nyquist:
     nqi, nqq, nqf = cm.nyquist_plot(Hsiso_this, omega=omegas, Plot=False)
@@ -138,7 +177,7 @@ def plot_siso_bode(Hplant, iin, iout, omega_limits=[1e-3, 1e3], omega_num=1e5, d
     nqii = np.interp(ws_, nqf, nqi)
     nqqi = np.interp(ws_, nqf, nqq)
     for ipt in range(nqii.size):
-      line_ = axs[2].plot([-1., nqii[ipt]], [0., nqqi[ipt]], ':', color=color)
+      line_ = axs[2].plot([-1., nqii[ipt]], [0., nqqi[ipt]], '-', color=color)
       lines.append(line_)
 
   if show_legend:
@@ -149,10 +188,10 @@ def plot_siso_bode(Hplant, iin, iout, omega_limits=[1e-3, 1e3], omega_num=1e5, d
   return fig, axs, lines, texts
 
 
-def plot_siso_bodes_single_plant(Hplant, iins=None, iouts=None, omega_limits=[1e-3, 1e3],
-                                 omega_num=1e5, dB=True, Hz=True, show_margins=False,
-                                 show_nyquist=False, fig=None, axs=None, color=None,
-                                 show_legend=True):
+def plot_single_plant_bodes(Hplant, iins=None, iouts=None, omega_limits=[1e-3, 1e3],
+                            omega_num=1e5, dB=True, Hz=True, show_margins=False,
+                            show_nyquist=False, fig=None, axs=None, color=None,
+                            show_legend=True):
   """
   generate all bode plots for a plant
   """
@@ -183,17 +222,18 @@ def plot_siso_bodes_single_plant(Hplant, iins=None, iouts=None, omega_limits=[1e
 
   lines = []
   texts = []
+  iplot = -1
   for iin in iins:
     for iout in iouts:
-      iplot = iout*iouts.size + iin
+      iplot += 1
 
       (fig,
        axs,
        lines_,
-       texts_) = plot_siso_bode(Hplant, iin, iout, omega_limits=omega_limits,
-                                omega_num=omega_num, dB=dB, Hz=Hz, show_margins=show_margins,
-                                show_nyquist=show_nyquist, fig=fig, axs=axs,
-                                color=colors[iplot, :], linestyle='-', show_legend=show_legend)
+       texts_) = plot_bode(Hplant, iin, iout, omega_limits=omega_limits,
+                           omega_num=omega_num, dB=dB, Hz=Hz, show_margins=show_margins,
+                           show_nyquist=show_nyquist, fig=fig, axs=axs,
+                           color=colors[iplot, :], linestyle='-', show_legend=show_legend)
 
       lines.append(lines_)
       texts.append(texts_)
@@ -313,6 +353,7 @@ def load_state_space_model(filename, dirname='.', states_to_ignore=[]):
       Hplant.outputnames = outputnames
       Hplant.statenames = statenames
       Hplant.wind_speed = vwind
+      Hplant.azimuth = azi
 
       Hplant.dirname = dirname
       Hplant.filename = filename
