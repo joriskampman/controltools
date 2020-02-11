@@ -11,36 +11,94 @@ import numpy as np
 import logtools as lt
 import control as cm
 from scipy.io import loadmat
-from warnings import warn
+from warnings import warn  # noqa
 import matplotlib.pyplot as plt
-import pdb
+import pdb  # noqa
+from scipy.linalg import block_diag
 
 
-def load_multiple_models(files, dirname='', states_to_ignore=[], vwinds_wanted=None,
-                         azis_wanted=None):
+def merge_uncoupled_ss(Hlist, squeeze_inputs=True):
+  """
+  merge UNCOUPLED state space objects, this is handy to create a major single state space object
+  from parts
+
+  arguments:
+  ----------
+  Hlist : list of control objects
+          Maybe state-space representationso or transfer functions, may be siso or mimo too
+  squeeze_inputs : bool, default=True
+                   Whether to check if there are multiple inputs which are equal. If set to False,
+                   the number of inputs will equal the number of outputs
+  
+  returns:
+  --------
+  Hmerged : control state space representation
+            The merged state space representation
+  """
+
+  # merge to single state space representation
+  As = []
+  Bs = []
+  Cs = []
+  Ds = []
+  for H_ in Hlist:
+    A, B, C, D = cm.ssdata(H_)
+    As.append(A)
+    Bs.append(B)
+    Cs.append(C)
+    Ds.append(D)
+
+  # merge state space matrices into bigger block (no coupling)
+  A = block_diag(*As)
+  B = block_diag(*Bs)
+  C = block_diag(*Cs)
+  D = block_diag(*Ds)
+
+  if squeeze_inputs:
+    # remove common inputs
+    tf_D = np.isclose(np.sum(np.abs(D), axis=0), 0.)
+    tf_B = np.isclose(np.sum(np.abs(B), axis=0), 0.)
+    tf_keep = ~(tf_D*tf_B)
+
+    B = B[:, tf_keep]
+    D = D[:, tf_keep]
+
+  # make into merged state space
+  Hmerged = cm.ss(A, B, C, D)
+
+  return Hmerged
+
+
+def load_models(files, dirname='', states_to_ignore=[], vwinds_wanted=None, azis_wanted=None):
   """
   get a list of plant linearizations
   """
-  if isinstance(files, str):
-    files = [files,]
+  files = aux.listify(files)
 
   Hplants_list = []
   for file in files:
-    Hplants, vwinds, azis = load_state_space_model(file, dirname=dirname,
-                                                   states_to_ignore=states_to_ignore)
+    Hplants, vwinds, azis = load_state_space_model_file(file, dirname=dirname,
+                                                        states_to_ignore=states_to_ignore)
 
     if vwinds_wanted is None:
-      vwinds_wanted = vwinds.copy()
+      vwinds_wanted = np.copy(vwinds)
+    else:
+      vwinds_wanted = aux.listify(vwinds_wanted)
 
     if azis_wanted is None:
       azis_wanted = azis.copy()
+    else:
+      azis_wanted = aux.listify(azis_wanted)
 
     for vwind_wanted in vwinds_wanted:
-      iwind = get_closest_index(vwinds, vwind_wanted)
+      iwind = aux.get_closest_index(vwind_wanted, vwinds)
       for azi_wanted in azis_wanted:
-        iazi = get_closest_index(azis, azi_wanted)
+        iazi = aux.get_closest_index(azi_wanted, azis)
 
         Hplants_list.append(Hplants[iwind, iazi])
+
+  if len(Hplants_list) == 1:
+    Hplants_list = Hplants_list[0]
 
   return Hplants_list
 
@@ -53,8 +111,8 @@ def plot_multiple_bodes(Hplants_list, inputname, outputname, split=False, show_n
   axs = None
   colors = aux.jetmod(len(Hplants_list), 'vector', bright=True)
   for color, Hplant in zip(colors, Hplants_list):
-    iin = substr2index(inputname, Hplant.inputnames)
-    iout = substr2index(outputname, Hplant.outputnames)
+    iin = aux.substr2index(inputname, Hplant.inputnames)
+    iout = aux.substr2index(outputname, Hplant.outputnames)
     label = "wind = {:0.1f}, azi = {:0.1f} [deg] ({})".format(Hplant.wind_speed,
                                                               np.rad2deg(Hplant.azimuth),
                                                               Hplant.filename)
@@ -68,12 +126,29 @@ def plot_multiple_bodes(Hplants_list, inputname, outputname, split=False, show_n
   return fig, axs
 
 
-def plot_bode(Hplant, iin, iout, omega_limits=[1e-3, 1e3], omega_num=1e5, dB=True, Hz=True,
+def _handle_iin_iout(iin, iout, Hplant):
+  """
+  handle different forms of iin, iout (str, array, whatever)
+  """
+
+  # do check on iin and iout
+  if isinstance(iin, str):
+    iin = aux.substr2index(iin, Hplant.inputnames)
+
+  if isinstance(iout, str):
+    iout = aux.substr2index(iout, Hplant.outputnames)
+
+  return iin, iout
+
+
+def plot_bode(Hplant, iin=0, iout=0, omega_limits=[1e-5, 1e2], omega_num=1e4, dB=True, Hz=True,
               show_margins=False, show_nyquist=False, fig=None, axs=None, color='b',
               linestyle='-', show_legend=True, label=None):
   """
   plot a single bode plot
   """
+  iin, iout = _handle_iin_iout(iin, iout, Hplant)
+
   # plot all possible transfer functions
   if fig is None:
     fig = plt.figure(aux.figname("stability plots"))
@@ -120,72 +195,56 @@ def plot_bode(Hplant, iin, iout, omega_limits=[1e-3, 1e3], omega_num=1e5, dB=Tru
     Hsiso_this = make_siso(Hplant, iin, iout)
 
   mags, phs, omegas = cm.bode_plot(Hsiso_this, dB=True, Hz=True, Plot=False,
-                                   omega_limits=[1e-4, 1e2], omega_num=1e4)
+                                   omega_limits=omega_limits, omega_num=omega_num)
 
-  # # bring phases to between -180 and 180
-  # phs = np.angle(np.exp(1j*phs))
-  # # bring phases between -360 and 0
-  # iabove0 = np.nonzero(phs > 0.)
-  # phs[iabove0] -= 2*np.pi
-
-  lines = []
-  texts = []
   # convert phs to interval -inf, 0 to be able to verify the phase margins correctly
   if label is None:
     label = "{} -> {}".format(namein, nameout)
-  line_ = axs[0].semilogx(omegas/(2*np.pi), cm.mag2db(mags), "-", label=label, color=color,
-                          linestyle=linestyle)
-  lines.append(line_)
-  line_ = axs[1].semilogx(omegas/(2*np.pi), np.rad2deg(phs), "-", label=label,
-                          color=color, linestyle=linestyle)
-  lines.append(line_)
+
+  axs[0].semilogx(omegas/(2*np.pi), cm.mag2db(mags), "-", label=label, color=color,
+                  linestyle=linestyle)
+  axs[1].semilogx(omegas/(2*np.pi), np.rad2deg(phs), "-", label=label,
+                  color=color, linestyle=linestyle)
 
   gm_, pm_, sm_, wg_, wp_, ws_ = cm.stability_margins(Hsiso_this, returnall=True)
 
   for wg__, gm__ in zip(wg_, gm_):
     gmdb = cm.mag2db(gm__)
     wghz = wg__/(2*np.pi)
-    line_ = axs[0].plot(wghz*np.array([1., 1.]), [0., -gmdb], ':', color=color)
-    lines.append(line_)
-    text_ = axs[0].text(wghz, -gmdb/2, "{:0.0f}".format(-gmdb), ha='center', va='center',
-                        fontsize=7, fontweight='bold', color=color, backgroundcolor='w',
-                        bbox={'pad': 0.1, 'color': 'w'})
-    texts.append(text_)
+    axs[0].plot(wghz*np.array([1., 1.]), [0., -gmdb], ':', color=color)
+    axs[0].text(wghz, -gmdb/2, "{:0.0f}".format(-gmdb), ha='center', va='center',
+                fontsize=7, fontweight='bold', color=color, backgroundcolor='w',
+                bbox={'pad': 0.1, 'color': 'w'})
 
   for wp__, pm__ in zip(wp_, pm_):
     # check if it is relative to -180 or +180
-    iomega = get_closest_index(omegas, wp__)
+    iomega = aux.get_closest_index(wp__, omegas)
     nof_folds = np.abs(np.fix(phs[iomega]/(2*np.pi)))
 
     offset = -(nof_folds*2. + 1.)*180.
 
     wphz = wp__/(2*np.pi)
-    line_ = axs[1].plot(wphz*np.array([1., 1.]), [offset + pm__, -180], ':',
-                        color=color)
-    text_ = axs[1].text(wphz, (offset + pm__)/2 - 90., "{:0.0f}".format(pm__),
-                        ha='center', va='center', fontsize=7, fontweight='bold', color=color,
-                        bbox={'pad': 0.1, 'color': 'w'})
-
-    lines.append(line_)
-    texts.append(text_)
+    axs[1].plot(wphz*np.array([1., 1.]), [offset + pm__, -180], ':', color=color)
+    axs[1].text(wphz, (offset + pm__)/2 - 90., "{:0.0f}".format(pm__),
+                ha='center', va='center', fontsize=7, fontweight='bold', color=color,
+                bbox={'pad': 0.1, 'color': 'w'})
 
   if show_nyquist:
     nqi, nqq, nqf = cm.nyquist_plot(Hsiso_this, omega=omegas, Plot=False)
     cvec = aux.color_vector(omegas.size, color, os=0.25)
-    line_ = axs[2].scatter(nqi, nqq, s=2, c=cvec)
-    lines.append(line_)
+    axs[2].scatter(nqi, nqq, s=2, c=cvec)
+
     nqii = np.interp(ws_, nqf, nqi)
     nqqi = np.interp(ws_, nqf, nqq)
     for ipt in range(nqii.size):
-      line_ = axs[2].plot([-1., nqii[ipt]], [0., nqqi[ipt]], '-', color=color)
-      lines.append(line_)
+      axs[2].plot([-1., nqii[ipt]], [0., nqqi[ipt]], '-', color=color)
 
   if show_legend:
     axs[0].legend(fontsize=8, loc='upper right')
 
   plt.show(block=False)
 
-  return fig, axs, lines, texts
+  return fig, axs
 
 
 def plot_single_plant_bodes(Hplant, iins=None, iouts=None, omega_limits=[1e-3, 1e3],
@@ -200,71 +259,39 @@ def plot_single_plant_bodes(Hplant, iins=None, iouts=None, omega_limits=[1e-3, 1
   if iins is None:
     iins = np.r_[0:Hplant.inputs]
   else:
-    if isinstance(iins, (list, tuple)):
-      iins = np.array(iins)
-    elif isinstance(iins, (int)):
-      iins = np.array([iins,], dtype=np.int)
+    iins = aux.arrayify(iins)
+    # if isinstance(iins, (list, tuple)):
+    #   iins = np.array(iins)
+    # elif isinstance(iins, (int)):
+    #   iins = np.array([iins,], dtype=np.int)
 
   if iouts is None:
     iouts = np.r_[0:Hplant.outputs]
   else:
-    if isinstance(iouts, (list, tuple)):
-      iouts = np.array(iouts)
-    elif isinstance(iouts, (int)):
-      iouts = np.array([iouts,], dtype=np.int)
+    iouts = aux.arrayify(iouts)
+    # if isinstance(iouts, (list, tuple)):
+    #   iouts = np.array(iouts)
+    # elif isinstance(iouts, (int)):
+    #   iouts = np.array([iouts,], dtype=np.int)
 
   # determine the colors
   nof_bodes = iins.size*iouts.size
   if color is None:
-    colors = aux.jetmod(nof_bodes, 'vector')
+    colors = aux.jetmod(nof_bodes, 'vector', bright=True)
   else:
     colors = color.reshape(-1, 3)
 
-  lines = []
-  texts = []
   iplot = -1
   for iin in iins:
     for iout in iouts:
       iplot += 1
 
-      (fig,
-       axs,
-       lines_,
-       texts_) = plot_bode(Hplant, iin, iout, omega_limits=omega_limits,
-                           omega_num=omega_num, dB=dB, Hz=Hz, show_margins=show_margins,
-                           show_nyquist=show_nyquist, fig=fig, axs=axs,
-                           color=colors[iplot, :], linestyle='-', show_legend=show_legend)
+      (fig, axs) = plot_bode(Hplant, iin, iout, omega_limits=omega_limits,
+                             omega_num=omega_num, dB=dB, Hz=Hz, show_margins=show_margins,
+                             show_nyquist=show_nyquist, fig=fig, axs=axs,
+                             color=colors[iplot, :], linestyle='-', show_legend=show_legend)
 
-      lines.append(lines_)
-      texts.append(texts_)
-
-  return fig, axs, lines, texts
-
-
-def get_closest_index(values, value_wanted, suppress_warnings=False):
-  """
-  get the closest index
-  """
-  ifnd_arr = np.argwhere(np.isclose(values, value_wanted)).ravel()
-  if ifnd_arr.size > 0:
-    ifnd = ifnd_arr.item()
-  else:
-    # get the closest
-    ifnd = np.argmin(np.abs(values - value_wanted)).ravel()[0]
-    if not suppress_warnings:
-      warn("There is no `exact` match for value = {}. Taking the closest value = {}".
-           format(value_wanted, values[ifnd]))
-
-  return ifnd
-
-
-def substr2index(substring, strlist):
-  """
-  find the indices of a certain substring
-  """
-  index = np.argwhere([substring.lower() in elm.lower() for elm in strlist]).item()
-
-  return index
+  return fig, axs
 
 
 def find_valid_states(statenames, states_to_ignore):
@@ -313,7 +340,7 @@ def remove_states(Hplants, states_to_ignore):
     _remove_states_single(Hplants, states_to_ignore)
 
 
-def load_state_space_model(filename, dirname='.', states_to_ignore=[]):
+def load_state_space_model_file(filename, dirname='.', states_to_ignore=[]):
   """
   Load the state space model from a .mat file and return the transfer statespace model of the plant
   """
@@ -335,6 +362,25 @@ def load_state_space_model(filename, dirname='.', states_to_ignore=[]):
   Bs = ssmat['SYSTURB'][0, 0]['B']
   Cs = ssmat['SYSTURB'][0, 0]['C']
   Ds = ssmat['SYSTURB'][0, 0]['D']
+
+  if azis.size == 1:
+    # add extra dimension as placeholder
+    As = np.expand_dims(As, -1)
+    Bs = np.expand_dims(Bs, -1)
+    Cs = np.expand_dims(Cs, -1)
+    Ds = np.expand_dims(Ds, -1)
+  if vwinds.size == 1:
+    As = np.expand_dims(As, -1)
+    Bs = np.expand_dims(Bs, -1)
+    Cs = np.expand_dims(Cs, -1)
+    Ds = np.expand_dims(Ds, -1)
+
+    # roll this dimension to position 2
+    As = np.swapaxis(As, 2, 3)
+    Bs = np.swapaxis(Bs, 2, 3)
+    Cs = np.swapaxis(Cs, 2, 3)
+    Ds = np.swapaxis(Ds, 2, 3)
+
   for ivw, vwind in enumerate(vwinds):
     for iazi, azi in enumerate(azis):
       A = As[..., ivw, iazi]
@@ -363,23 +409,24 @@ def load_state_space_model(filename, dirname='.', states_to_ignore=[]):
   return Hplants, vwinds, azis
 
 
-def make_siso(plant, iinput, ioutput):
+def make_siso(Hplant, iinput, ioutput):
   """
   make a MIMO system into a SISO system
   """
+  iinput, ioutput = _handle_iin_iout(iinput, ioutput, Hplant)
 
-  siso = cm.rss(states=plant.states, inputs=1, outputs=1)
-  siso.A = plant.A.copy()
-  siso.B = plant.B[:, iinput].reshape(-1, 1)
-  siso.C = plant.C[ioutput, :].reshape(1, -1)
-  siso.D = plant.D[ioutput, iinput].reshape(1, 1)
+  siso = cm.rss(states=Hplant.states, inputs=1, outputs=1)
+  siso.A = Hplant.A.copy()
+  siso.B = Hplant.B[:, iinput].reshape(-1, 1)
+  siso.C = Hplant.C[ioutput, :].reshape(1, -1)
+  siso.D = Hplant.D[ioutput, iinput].reshape(1, 1)
 
-  if hasattr(plant, 'inputnames'):
-    siso.inputnames = np.array([plant.inputnames[iinput],])
-  if hasattr(plant, 'outputnames'):
-    siso.outputnames = np.array([plant.outputnames[ioutput],])
-  if hasattr(plant, 'statenames'):
-    siso.statenames = plant.statenames
+  if hasattr(Hplant, 'inputnames'):
+    siso.inputnames = np.array([Hplant.inputnames[iinput],])
+  if hasattr(Hplant, 'outputnames'):
+    siso.outputnames = np.array([Hplant.outputnames[ioutput],])
+  if hasattr(Hplant, 'statenames'):
+    siso.statenames = Hplant.statenames
 
   return siso
 
@@ -505,31 +552,63 @@ def notch(omega_notch, damping_factor):
   return cm.tf([1, 0, omega_notch**2], [1, 2*damping_factor*omega_notch, omega_notch**2])
 
 
-def pidstd(Kp, Ti=0, Td=0, N=100):
+def _handle_pid_inputs(**kwargs):
+  """
+  handle the inputs to the pid
+  """
+  # handle inputs whether times or gains and convert to gains
+  if 'Ki' not in kwargs.keys():
+    if 'Ti' in kwargs.keys():
+      Ki = 1./kwargs['Ti']
+    else:
+      Ki = 0
+  else:
+    Ki = kwargs['Ki']
+  if 'Kd' not in kwargs.keys():
+    if 'Td' in kwargs.keys():
+      Kd = 1./kwargs['Td']
+    else:
+      Kd = 0
+  else:
+    Kd = kwargs['Kd']
+
+  return Ki, Kd
+
+
+def pidstd(Kp, N=100, **kwargs):
   """
   creates the pid controller in the ideal/standard format:
 
   C = Kp*(1 + (1/Ti)*(1/s) + Td*s/((Td/N)s + 1))
   """
-  Hp = cm.tf(1)
-  Hi = cm.tf(1, [Ti, 0])
-  Hd = cm.tf([Td, 0], [Td/N, 1])
+  # get inputs
+  Ki, Kd = _handle_pid_inputs(**kwargs)
 
-  Hpid = Kp*(Hp + Hi + Hd)
+  s = cm.tf('s')  # make building block
+
+  # build the equation
+  Hpid = Kp*(1. + Ki*(1./s) + Kd*(N/(1. + N*(1/s))))
 
   return Hpid
 
 
-def pidpar(Kp, Ki=0, Kd=0, Tf=0):
+def pidpar(Kp, **kwargs):
   """
   define a PID controller in `parallel` format
   """
-  Hpid = Kp* + cm.tf(Ki, [1, 0]) + cm.tf([Kd, 0], [Tf, 1])
+  Ki, Kd = _handle_pid_inputs(**kwargs)
+  if 'Tf' not in kwargs.keys():
+    Tf = np.inf
+  else:
+    Tf = kwargs['Tf']
+
+  s = cm.tf('s')
+  Hpid = Kp + Ki/s + Kd*s/(Tf*s + 1.)
 
   return Hpid
 
 
-def pid(Kp, Ki=0, Kd=0, Ti=0, Td=0, Tf=0, N=100, form='ideal'):
+def pid(Kp, N=100, form='ideal', **kwargs):
   """
   PID controller according to the ideal scheme:
   H(s) = P(1 + I/s + D(N/(1 + N/s)))
@@ -540,9 +619,9 @@ def pid(Kp, Ki=0, Kd=0, Ti=0, Td=0, Tf=0, N=100, form='ideal'):
   forms: series, parallel, standard
   """
   if form.startswith("standard") or form.startswith("ideal"):
-    Hpid = pidstd(Kp, Ti=Ti, Td=Td, N=N)
+    Hpid = pidstd(Kp, N=N, **kwargs)
   elif form.startswith("parallel"):
-    Hpid = pidpar(Kp, Ki=Ki, Kd=Kd, Tf=Tf)
+    Hpid = pidpar(Kp, **kwargs)
   else:
     raise NotImplementedError("Other forms than `standard`, and `parallel` are not" +
                               " implemented yet")
