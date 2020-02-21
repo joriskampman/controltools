@@ -14,7 +14,346 @@ from scipy.io import loadmat
 from warnings import warn  # noqa
 import matplotlib.pyplot as plt
 import pdb  # noqa
-from scipy.linalg import block_diag
+
+
+def _linear_interpolation(ys, xs, ythres):
+  """
+  adsfadsfasdf
+  """
+  dx = np.diff(xs).item()
+  dy = np.abs(np.diff(ys).item())
+  dy0 = np.abs(ys[0] - ythres)
+
+  dyratio = dy0/dy
+
+  t_interp = xs[0] + dx*dyratio
+
+  return t_interp
+
+
+def settling_time(ys, ts=None, yfinal=None, perc=2., nbuffer=20, interp='linear'):
+  """
+  calculate the setting time based on the step response output
+  """
+  frac = perc/100.
+
+  if ts is None:
+    ts = np.r_[:len(ys)]
+
+  if yfinal is None:
+    yfinal = np.mean(ys[-nbuffer:])
+
+  # check if last req_buffer smaples are within perc
+  if np.max(np.abs(ys[-nbuffer:] - yfinal)) > perc/100:
+    warn('Shit has not settled upto {:d} samples before the end.'.format(nbuffer))
+    return np.nan
+
+  yrefinv = ys[-1::-1]  # from right to left
+  i_last_unsettled = ys.size - np.argwhere(np.abs(yrefinv - yfinal) > frac).item(0) - 1
+  if interp == 'linear':
+
+    # determine threshold
+    sgn = np.sign((ys[i_last_unsettled] - yfinal)/frac)
+    ythres = yfinal + sgn*frac
+
+    # linear interpolation
+    t_settle = _linear_interpolation(ys[i_last_unsettled:i_last_unsettled+2],
+                                     ts[i_last_unsettled:i_last_unsettled+2],
+                                     ythres)
+  elif interp == 'nearest':
+    t_settle = ts[i_last_unsettled + 1]
+  else:
+    raise NotImplementedError("The interpolation scheme provided ({}) is not implemented".
+                              format(interp))
+
+  return t_settle
+
+
+def rise_time(ys, ts=None, yfinal=None, percs=[10., 90.], nbuffer=20, interp='linear'):
+  """
+  calculate the rise time; the time between 10 and 90 of the final value
+  """
+  if yfinal is None:
+    yfinal = np.mean(ys[-nbuffer:])
+
+  fracs = [perc/100 for perc in percs]
+
+  # start fraction passed for the first time
+  i_low = np.argwhere(ys > fracs[0]*yfinal).item(0) - 1
+  i_high = np.argwhere(ys > fracs[1]*yfinal).item(0) - 1
+
+  dt_low = _linear_interpolation(ys[i_low:i_low+2], ts[i_low:i_low+2], fracs[0]*yfinal)
+  dt_high = _linear_interpolation(ys[i_high:i_high+2], ts[i_high:i_high+2], fracs[1]*yfinal)
+
+  t_rise = dt_high - dt_low
+
+  return t_rise
+
+
+def peak_chars(ys, ts=None):
+  """
+  find the time of the peak
+  """
+  if ts is None:
+    ts = np.r_[:ys.size]
+
+  imax = np.argmax(ys)
+  ienv = imax + np.r_[-1:2]
+
+  # fit quadratic
+  a, b, c = np.polyfit(ts[ienv], ys[ienv], 2)
+
+  # peak at -b/2a
+  t_peak = -b/(2*a)
+
+  # y_peak
+  y_peak = np.polyval((a, b, c), t_peak)
+
+  return t_peak, y_peak
+
+
+def settling_min(ys, ts=None):
+  """
+  find the settling min time
+  """
+  if ts is None:
+    ts = np.r_[:ys.size]
+
+  imax = np.argmax(ys).item()
+
+  # find the minimum value after the peak
+  ys_ = ys[imax:]
+  imin = imax + np.argmin(ys_).item()
+
+  ienv = imin + np.r_[-1:2]
+
+  a, b, c = np.polyfit(ts[ienv], ys[ienv], 2)
+
+  t_dip = -b/(2*a)
+
+  y_dip = np.polyval((a, b, c), t_dip)
+
+  return t_dip, y_dip
+
+
+def overshoot(ys, ts=None, yfinal=None, nbuffer=20, as_percentage=True):
+  """
+  calculate the percentage overshoot
+  """
+  if ts is None:
+    ts = np.r_[:ys.size]
+
+  if yfinal is None:
+    yfinal = np.mean(ys[-nbuffer:])
+
+  # get peak
+  tpeak, ypeak = peak_chars(ys, ts=ts)
+
+  outval = ypeak - yfinal
+  if as_percentage:
+    outval = 100*outval/yfinal
+
+  return outval
+
+
+def stepinfo(ys, ts=None, yfinal=None, rise_percs=[10., 90.], settle_perc=2., interp='linear',
+             nbuffer=20):
+  """
+  gather all step response information available
+  """
+  if ts is None:
+    ts = np.r_[:ys.size]
+
+  if yfinal is None:
+    yfinal = np.mean(ys[-nbuffer:])
+
+  # rise_time
+  trise = rise_time(ys, ts=ts, yfinal=yfinal, percs=rise_percs, interp=interp)
+
+  # settling time
+  tsettle = settling_time(ys, ts=ts, yfinal=yfinal, perc=settle_perc, interp=interp)
+
+  # peak chars
+  tpeak, ymax_settle = peak_chars(ys, ts=ts)
+
+  # minimum settle
+  tmin_settle, ymin_settle = settling_min(ys, ts)
+
+  # overshoot
+  perc_overshoot = overshoot(ys, ts=ts, yfinal=yfinal, as_percentage=True)
+
+  # place them all in a dict
+  out = dict(rise_time=trise,
+             settling_time=tsettle,
+             peak_time=tpeak,
+             peak_value=ymax_settle,
+             percentage_overshoot=perc_overshoot,
+             minimum_settling_time=tmin_settle,
+             minimum_settling_value=ymin_settle,
+             final_value=yfinal,
+             nbuffer=nbuffer,
+             rise_percs=rise_percs,
+             settling_percentage=settle_perc)
+
+  return out
+
+
+def _prune(Hsys, strlist, inout):
+  """
+  prune the inputs of a system
+  """
+  if inout == 'in':
+    allnames = Hsys.inputnames.copy()
+  elif inout == 'out':
+    allnames = Hsys.outputnames.copy()
+
+  indices2keep = []
+
+  nameslist = []
+  for i2k in strlist:
+    ifnd = aux.find_elm_containing_substrs(i2k, allnames, nreq=1, strmatch="all")
+    indices2keep.append(ifnd)
+    nameslist.append(allnames[ifnd])
+
+  # set all invalids to zero
+  if inout == 'in':
+    Hsys.B = Hsys.B[:, indices2keep]
+    Hsys.D = Hsys.D[:, indices2keep]
+    Hsys.inputs = len(indices2keep)
+    Hsys.inputnames = nameslist
+  elif inout == 'out':
+    Hsys.C = Hsys.C[indices2keep, :]
+    Hsys.D = Hsys.D[indices2keep, :]
+    Hsys.outputs = len(indices2keep)
+    Hsys.outputnames = nameslist
+
+  return indices2keep
+
+
+def prune_ios(Hsys, inputnames=None, outputnames=None):
+  """
+  prune the inputs and outputs from a system
+  """
+  iins = np.r_[:Hsys.inputs]
+  iouts = np.r_[:Hsys.outputs]
+  if inputnames is not None:
+    iins = _prune(Hsys, inputnames, 'in')
+
+  if outputnames is not None:
+    iouts = _prune(Hsys, outputnames, 'out')
+
+  return iins, iouts
+
+
+def build_system(blocks, Qstrings, tag="system", opens=None, shorts=None):
+  """
+  build_system(blocks, Qstrings[, opens, shorts])
+
+  build the system from blocks (make_block) and define the connections in a [(from, to)]
+  array-like of tuples.
+
+  If one of the box has the flag `is_plant` set to True, the wind speed, azimuth and reference
+  generator and rotor speeds are taken from that
+
+  Arguments:
+  ----------
+  blocks : array-like of blocks
+           contains blocks that are made by `make_block`. They need to have attributes
+           `inputnames` and `outputnames` as well as a tag as a minimum. `make_block`
+           ensures the creation of those
+  tag : str, default='system'
+        The id tag the returned system will have             
+  Qstrings : array-like of tuples of strings
+             Contains tuples of strings describing the `from` and `to` of any signal. This is
+             different from the order in the control module Q array (which has inputs first, 
+             and then outputs). I've found it more easy to visualize it from output to input.
+
+             Every input/output string is split into parts and searched in the list of inputs/
+             outputs.
+
+             the inputs may be a tuple too, this means that the output will be split and fed into
+             multiple inputs.
+
+             Note: a `!` as first character indicates a NEGATIVE feedback                
+  opens : [None | str | array-like of strings], default=None
+          Defines the blocks which are to be made into and open; that is a zero output or a
+          broken connection
+  shorts : [None | str | array-like of strings], default=None  
+           Defines the blocks which are a shortcut; output = input
+
+  Returns:
+  --------
+  out : state-space object
+  """
+
+  # next step: define interconnections based on input and outputnames
+  Qstrings_arr = np.array(Qstrings, dtype=[('outputs', object), ('inputs', object)])
+
+  opens = aux.tuplify(opens)
+  shorts = aux.tuplify(shorts)
+
+  for iblock in range(len(blocks)):
+    btag = blocks[iblock].tag
+    if btag in opens:
+      blocks[iblock] = make_block('open', btag)
+
+    if btag in shorts:
+      blocks[iblock] = make_block('short', btag)
+
+  # 1: check all blocks mentioned in Q
+  sys_inputnames = []
+  sys_outputnames = []
+  iplant = -1
+  for iblock, block in enumerate(blocks):
+    btag = block.tag
+    sys_inputnames += block.inputnames
+    sys_outputnames += block.outputnames
+    if block.is_plant:
+      iplant = iblock
+
+  Ql = []
+  for qa in Qstrings_arr:
+    out = qa['outputs']
+    # find exact output index (remember: start at 1!!!!)
+    iout = aux.find_elm_containing_substrs(out, sys_outputnames, nreq=1, strmatch='all')
+
+    ins = aux.tuplify(qa['inputs'])
+    for in_ in ins:
+      # check if it contains an exclamation point (!) indicating a negative feedback
+      is_fb = False
+      if in_.startswith('!'):
+        is_fb = True
+        in_ = in_[1:]
+
+      # find the index
+      iin_ = aux.find_elm_containing_substrs(in_, sys_inputnames, nreq=1, strmatch='all')
+
+      # add to Q array
+      Ql.append((iin_+1, (1 - 2*is_fb)*(iout+1)))
+
+  Q = aux.arrayify(Ql)
+
+  inputv = np.r_[:len(sys_inputnames)] + 1
+  outputv = np.r_[:len(sys_outputnames)] + 1
+
+  Hsys_parts = cm.append(*blocks)
+  Hsys = cm.connect(Hsys_parts, Q, inputv, outputv)
+
+  Hsys.inputnames = sys_inputnames
+  Hsys.outputnames = sys_outputnames
+
+  if iplant > -1:
+    possible_attrs = ('wind_speed',
+                      'azimuth',
+                      'ref_generator_speed',
+                      'ref_generator_torque',
+                      'ref_rotor_speed',
+                      'ref_pitch')
+    for attr in possible_attrs:
+      if hasattr(blocks[iplant], attr):
+        setattr(Hsys, attr, getattr(blocks[iplant], attr))
+
+  return Hsys
 
 
 def replace_io_strings(nameslist, replacements, show_warnings=False):
@@ -39,26 +378,33 @@ def make_block(btype, tag, dt=0., inames=None, onames=None, ss_or_tf='ss', keep_
   to be filled in
   """
   # take blargs as keyword arguments for the subfunctions
-
-  # if btype == 'plant':
-  #   if 'ss' in blargs.keys():
-  #     block = blargs['ss']
-  #   elif 'ssdata' in blargs.keys():
-  #     block = cm.ss(**blargs)
-  #   elif 'tf' in blargs.keys():
-  #     block = cm.tf2ss(blargs['tf'])
+  is_plant = False
+  if btype == 'plant':
+    if 'ss' in blargs.keys():
+      block = blargs['ss']
+    elif 'ssdata' in blargs.keys():
+      block = cm.StateSpace(**blargs, remove_useless=False)
+    elif 'tf' in blargs.keys():
+      block = cm.tf2ss(blargs['tf'])
+    is_plant = True
+    if inames is None:
+      if hasattr(block, 'inputnames'):
+        inames = block.inputnames.copy()
+    if onames is None:
+      if hasattr(block, 'outputnames'):
+        onames = block.outputnames.copy()
   if btype == 'g':
-    block = cm.ss([], [], [], blargs['gain'])
+    block = cm.StateSpace([], [], [], blargs['gain'], remove_useless=False)
   elif btype == 'short':
-    block = cm.ss([], [], [], 1.)
+    block = cm.StateSpace([], [], [], 1., remove_useless=False)
   elif btype == 'open':
-    block = cm.ss([], [], [], 0.)
+    block = cm.StateSpace([], [], [], 0., remove_useless=False)
   elif btype == 'inv':
-    block = cm.ss([], [], [], -1.)
+    block = cm.StateSpace([], [], [], -1., remove_useless=False)
   elif btype == 'ss':
     block = blargs['ss']
   elif btype == 'ssdata':
-    block = cm.ss(**blargs)
+    block = cm.StateSpace(**blargs, remove_useless=False)
   elif btype == 'tf':
     block = cm.tf2ss(blargs['tf'])
   elif btype in ['p', 'i', 'd', 'pi', 'pd', 'pid']:
@@ -70,6 +416,7 @@ def make_block(btype, tag, dt=0., inames=None, onames=None, ss_or_tf='ss', keep_
 
   block.dt = dt
   block.tag = tag
+  block.is_plant = is_plant
 
   gen_inputnames = True
   gen_outputnames = True
@@ -98,58 +445,6 @@ def make_block(btype, tag, dt=0., inames=None, onames=None, ss_or_tf='ss', keep_
         block.outputnames[-1] += "_{:s}".format(given_name)
 
   return block
-
-
-def merge_uncoupled_ss(Hlist, squeeze_inputs=True):
-  """
-  merge UNCOUPLED state space objects, this is handy to create a major single state space object
-  from parts
-
-  arguments:
-  ----------
-  Hlist : list of control objects
-          Maybe state-space representationso or transfer functions, may be siso or mimo too
-  squeeze_inputs : bool, default=True
-                   Whether to check if there are multiple inputs which are equal. If set to False,
-                   the number of inputs will equal the number of outputs
-  
-  returns:
-  --------
-  Hmerged : control state space representation
-            The merged state space representation
-  """
-
-  # merge to single state space representation
-  As = []
-  Bs = []
-  Cs = []
-  Ds = []
-  for H_ in Hlist:
-    A, B, C, D = cm.ssdata(H_)
-    As.append(A)
-    Bs.append(B)
-    Cs.append(C)
-    Ds.append(D)
-
-  # merge state space matrices into bigger block (no coupling)
-  A = block_diag(*As)
-  B = block_diag(*Bs)
-  C = block_diag(*Cs)
-  D = block_diag(*Ds)
-
-  if squeeze_inputs:
-    # remove common inputs
-    tf_D = np.isclose(np.sum(np.abs(D), axis=0), 0.)
-    tf_B = np.isclose(np.sum(np.abs(B), axis=0), 0.)
-    tf_keep = ~(tf_D*tf_B)
-
-    B = B[:, tf_keep]
-    D = D[:, tf_keep]
-
-  # make into merged state space
-  Hmerged = cm.ss(A, B, C, D)
-
-  return Hmerged
 
 
 def load_models(files, dirname='', states_to_ignore=[], vwinds_wanted=None, azis_wanted=None,
@@ -505,12 +800,12 @@ def load_state_space_model_file(filename, dirname='.', states_to_ignore=[], dt=0
       C = Cs[..., ivw, iazi]
       D = Ds[..., ivw, iazi]
 
-      Hplant = cm.ss(A, B, C, D, dt)
-      Hplant.A = A.copy()
-      Hplant.states = A.shape[0]
-      Hplant.B = B.copy()
-      Hplant.C = C.copy()
-      Hplant.D = D.copy()
+      Hplant = cm.StateSpace(A, B, C, D, dt, remove_useless=False)
+      # Hplant.A = A.copy()
+      # Hplant.states = A.shape[0]
+      # Hplant.B = B.copy()
+      # Hplant.C = C.copy()
+      # Hplant.D = D.copy()
       Hplant.inputnames = inputnames
       Hplant.outputnames = outputnames
       Hplant.statenames = statenames
@@ -518,6 +813,8 @@ def load_state_space_model_file(filename, dirname='.', states_to_ignore=[], dt=0
       Hplant.azimuth = azi
       Hplant.ref_generator_speed = ssmat['NomSpeedArray'][ivw, iazi]
       Hplant.ref_rotor_speed = ssmat['RotorSpeeds'][0, ivw]
+      Hplant.ref_pitch = ssmat['PitchAngles'][ivw, iazi]
+      Hplant.ref_generator_torque = ssmat['NomTorqueArray'][ivw, iazi]
 
       Hplant.dirname = dirname
       Hplant.filename = filename
