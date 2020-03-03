@@ -43,12 +43,21 @@ def settling_time(ys, ts=None, yfinal=None, perc=2., nbuffer=20, interp='linear'
   if yfinal is None:
     yfinal = np.mean(ys[-nbuffer:])
 
-  # check if last req_buffer smaples are within perc
-  if np.max(np.abs(ys[-nbuffer:] - yfinal)) > perc/100:
-    warn('Shit has not settled upto {:d} samples before the end.'.format(nbuffer))
-    return np.nan
+  ythres = perc/100
+  if np.isclose(yfinal/1000, 0.):
+    ythres = ys.max()*(perc/100)
 
+  # check if last req_buffer smaples are within perc
+  if np.max(np.abs(ys[-nbuffer:] - yfinal)) > ythres:
+    warn('Shit has not settled upto {:d} samples before the end.'.format(nbuffer))
+    return np.nan, np.nan
+
+  # check 2: 
   yrefinv = ys[-1::-1]  # from right to left
+
+  if np.isclose(yfinal, 0.):
+    frac = ys.max()*frac
+
   i_last_unsettled = ys.size - np.argwhere(np.abs(yrefinv - yfinal) > frac).item(0) - 1
   if interp == 'linear':
 
@@ -66,7 +75,7 @@ def settling_time(ys, ts=None, yfinal=None, perc=2., nbuffer=20, interp='linear'
     raise NotImplementedError("The interpolation scheme provided ({}) is not implemented".
                               format(interp))
 
-  return t_settle
+  return t_settle, yfinal
 
 
 def rise_time(ys, ts=None, yfinal=None, percs=[10., 90.], nbuffer=20, interp='linear'):
@@ -202,6 +211,7 @@ def _prune(Hsys, strlist, inout):
   """
   prune the inputs of a system
   """
+  strlist = aux.tuplify(strlist)
   if inout == 'in':
     allnames = Hsys.inputnames.copy()
   elif inout == 'out':
@@ -262,10 +272,10 @@ def build_system(blocks, Qstrings, tag="system", opens=None, shorts=None):
            `inputnames` and `outputnames` as well as a tag as a minimum. `make_block`
            ensures the creation of those
   tag : str, default='system'
-        The id tag the returned system will have             
+        The id tag the returned system will have
   Qstrings : array-like of tuples of strings
              Contains tuples of strings describing the `from` and `to` of any signal. This is
-             different from the order in the control module Q array (which has inputs first, 
+             different from the order in the control module Q array (which has inputs first,
              and then outputs). I've found it more easy to visualize it from output to input.
 
              Every input/output string is split into parts and searched in the list of inputs/
@@ -274,11 +284,11 @@ def build_system(blocks, Qstrings, tag="system", opens=None, shorts=None):
              the inputs may be a tuple too, this means that the output will be split and fed into
              multiple inputs.
 
-             Note: a `!` as first character indicates a NEGATIVE feedback                
+             Note: a `!` as first character indicates a NEGATIVE feedback
   opens : [None | str | array-like of strings], default=None
           Defines the blocks which are to be made into and open; that is a zero output or a
           broken connection
-  shorts : [None | str | array-like of strings], default=None  
+  shorts : [None | str | array-like of strings], default=None
            Defines the blocks which are a shortcut; output = input
 
   Returns:
@@ -306,8 +316,8 @@ def build_system(blocks, Qstrings, tag="system", opens=None, shorts=None):
   iplant = -1
   for iblock, block in enumerate(blocks):
     btag = block.tag
-    sys_inputnames += block.inputnames
-    sys_outputnames += block.outputnames
+    sys_inputnames += block.inputnames.copy()
+    sys_outputnames += block.outputnames.copy()
     if block.is_plant:
       iplant = iblock
 
@@ -339,6 +349,9 @@ def build_system(blocks, Qstrings, tag="system", opens=None, shorts=None):
   Hsys_parts = cm.append(*blocks)
   Hsys = cm.connect(Hsys_parts, Q, inputv, outputv)
 
+  if iplant > -1:
+    Hsys.is_plant = True
+  Hsys.tag = tag
   Hsys.inputnames = sys_inputnames
   Hsys.outputnames = sys_outputnames
 
@@ -356,34 +369,39 @@ def build_system(blocks, Qstrings, tag="system", opens=None, shorts=None):
   return Hsys
 
 
-def replace_io_strings(nameslist, replacements, show_warnings=False):
+def replace_io_strings(Hplant, replacements, show_warnings=False):
   """
   modifiy entries in the list by the replacements
   """
-  outlist = nameslist.copy()
-  for repl in replacements:
-    try:
-      ifnd = aux.find_elm_containing_substrs(repl[0], nameslist, nreq=1, strmatch="all")
-      outlist[ifnd] = repl[1]
-    except Exception:
-      if show_warnings:
-        warn("nothing found for `{}` in {}".format(repl[0], nameslist))
+  outlists = (Hplant.inputnames.copy(), Hplant.outputnames.copy())
+  nameslists = outlists
+  for outlist, nameslist in zip(outlists, nameslists):
+    for repl in replacements:
+      try:
+        ifnd = aux.find_elm_containing_substrs(repl[0], nameslist, nreq=1, strmatch="all")
+        outlist[ifnd] = repl[1]
+      except Exception:
+        if show_warnings:
+          warn("nothing found for `{}` in {}".format(repl[0], nameslist))
 
-  return outlist
+  Hplant.inputnames = outlists[0].copy()
+  Hplant.outputnames = outlists[1].copy()
 
 
-def make_block(btype, tag, dt=0., inames=None, onames=None, ss_or_tf='ss', keep_names=False,
-               **blargs):
+def make_block(btype, tag, dt=0., inames=None, onames=None, force_statespace=True,
+               keep_names=False, **blargs):
   """
   to be filled in
   """
   # take blargs as keyword arguments for the subfunctions
+  remove_useless = False
+
   is_plant = False
   if btype == 'plant':
     if 'ss' in blargs.keys():
       block = blargs['ss']
     elif 'ssdata' in blargs.keys():
-      block = cm.StateSpace(**blargs, remove_useless=False)
+      block = cm.StateSpace(**blargs, remove_useless=remove_useless)
     elif 'tf' in blargs.keys():
       block = cm.tf2ss(blargs['tf'])
     is_plant = True
@@ -393,26 +411,38 @@ def make_block(btype, tag, dt=0., inames=None, onames=None, ss_or_tf='ss', keep_
     if onames is None:
       if hasattr(block, 'outputnames'):
         onames = block.outputnames.copy()
-  if btype == 'g':
-    block = cm.StateSpace([], [], [], blargs['gain'], remove_useless=False)
+  elif btype == 'g':
+    block = cm.StateSpace([], [], [], blargs['gain'], remove_useless=remove_useless)
   elif btype == 'short':
-    block = cm.StateSpace([], [], [], 1., remove_useless=False)
+    block = cm.StateSpace([], [], [], 1., remove_useless=remove_useless)
   elif btype == 'open':
-    block = cm.StateSpace([], [], [], 0., remove_useless=False)
+    block = cm.StateSpace([], [], [], 0., remove_useless=remove_useless)
   elif btype == 'inv':
-    block = cm.StateSpace([], [], [], -1., remove_useless=False)
+    block = cm.StateSpace([], [], [], -1., remove_useless=remove_useless)
   elif btype == 'ss':
     block = blargs['ss']
   elif btype == 'ssdata':
-    block = cm.StateSpace(**blargs, remove_useless=False)
+    block = cm.StateSpace(**blargs, remove_useless=remove_useless)
+  elif btype == 'tfdata':
+    block = cm.tf(blargs['num'], blargs['den'])
+    if force_statespace:
+      block = cm.tf2ss(block)
   elif btype == 'tf':
-    block = cm.tf2ss(blargs['tf'])
+    block = blargs['tf']
+    if force_statespace:
+      block = cm.tf2ss(block)
   elif btype in ['p', 'i', 'd', 'pi', 'pd', 'pid']:
     block = pid(**blargs)
   elif btype == 'nf':
     block = notch(**blargs)
   elif btype == 'bp':
     block = bandpass(**blargs)
+  elif btype == 'lp':
+    block = low_pass_filter(**blargs)
+  elif btype == 'hp':
+    block = high_pass_filter(**blargs)
+  else:
+    raise NotImplementedError("The wanted btype ({}) is not implemented".format(btype))
 
   block.dt = dt
   block.tag = tag
@@ -519,25 +549,29 @@ def _handle_iin_iout(iin, iout, Hplant):
   return iin, iout
 
 
-def plot_bode(Hplant, iin=0, iout=0, omega_limits=[1e-3, 1e2], omega_num=1e4, dB=True, Hz=True,
-              show_margins=False, show_nyquist=False, fig=None, axs=None, color='b',
-              linestyle='-', show_legend=True, label=None):
+def plot_bode(Hplant, input_=0, output=0, omega_limits=[1e-3, 1e2], omega_num=1e4, dB=True,
+              Hz=True, show_margins=False, show_nyquist=False, fig=None, axs=None, color='b',
+              linestyle='-', show_legend=True, label=None, figname="Bode plots",
+              suptitle=None):
   """
   plot a single bode plot
   """
-  iin, iout = _handle_iin_iout(iin, iout, Hplant)
+  iin, iout = _handle_iin_iout(input_, output, Hplant)
+
+  if figname is None:
+    figname = suptitle
 
   # plot all possible transfer functions
   if fig is None:
-    fig = plt.figure(aux.figname("stability plots"))
+    fig = plt.figure(aux.figname(figname))
     if show_nyquist:
       gs = fig.add_gridspec(2, 2)
     else:
       gs = fig.add_gridspec(2, 1)
     axs = [fig.add_subplot(gs[0, 0])]
     axs.append(fig.add_subplot(gs[1, 0], sharex=axs[0]))
-    fig.suptitle("Stability plots", fontweight="bold", fontsize=12)
-    axs[0].set_title("Bode: Magnitude")
+    fig.suptitle(suptitle, fontweight="bold", fontsize=12)
+    axs[0].set_title("Gain/Magnitude")
     if Hz:
       axs[0].set_xlabel("Frequency [Hz]")
     else:
@@ -545,7 +579,7 @@ def plot_bode(Hplant, iin=0, iout=0, omega_limits=[1e-3, 1e2], omega_num=1e4, dB
     axs[0].set_ylabel("magnitude [dB]")
     axs[0].grid(True)
     axs[0].axhline(0, color='k', linestyle=':')
-    axs[1].set_title("Bode: Phase")
+    axs[1].set_title("Phase")
     if Hz:
       axs[1].set_xlabel("Frequency [Hz]")
     else:
@@ -650,40 +684,131 @@ def plot_bode(Hplant, iin=0, iout=0, omega_limits=[1e-3, 1e2], omega_num=1e4, dB
   return fig, axs
 
 
-def plot_single_plant_bodes(Hplant, iins=None, iouts=None, omega_limits=[1e-3, 1e2],
+def plot_single_plant_bodes(Hplant, inputs=None, outputs=None, omega_limits=[1e-3, 1e2],
                             omega_num=1e5, dB=True, Hz=True, show_margins=False,
                             show_nyquist=False, fig=None, axs=None, colors=None,
-                            show_legend=True):
+                            show_legend=True, figname=None, suptitle="Bode plots"):
   """
   generate all bode plots for a plant
   """
 
   # handle input_indices and output_indices
-  if iins is None:
-    iins = np.r_[0:Hplant.inputs]
-  else:
-    iins = aux.arrayify(iins)
+  if inputs is None:
+    inputs = np.r_[0:Hplant.inputs]
+  inputs = aux.arrayify(inputs)
 
-  if iouts is None:
-    iouts = np.r_[0:Hplant.outputs]
-  else:
-    iouts = aux.arrayify(iouts)
+  if outputs is None:
+    outputs = np.r_[0:Hplant.outputs]
+  outputs = aux.arrayify(outputs)
 
   # determine the colors
-  nof_bodes = iins.size*iouts.size
+  nof_bodes = inputs.size*outputs.size
   if colors is None:
     colors = aux.jetmod(nof_bodes, 'vector', bright=True)
 
   iplot = -1
-  for iin in iins:
-    for iout in iouts:
+  for iin in inputs:
+    for iout in outputs:
       iplot += 1
       (fig, axs) = plot_bode(Hplant, iin, iout, omega_limits=omega_limits,
                              omega_num=omega_num, dB=dB, Hz=Hz, show_margins=show_margins,
                              show_nyquist=show_nyquist, fig=fig, axs=axs,
-                             color=colors[iplot], linestyle='-', show_legend=show_legend)
+                             color=colors[iplot], linestyle='-', show_legend=show_legend,
+                             figname=figname, suptitle=suptitle)
 
   return fig, axs
+
+
+def plot_root_locus(Hplant, input_=0, output=0, centered=True, klims=[0.01, 100], num_k=1e3,
+                    klist=None, isklog=True, figname=None, suptitle="Root-locus", ax=None,
+                    legacy=False, title=None, Hz=False, show_legend=True, xlim=None, ylim=None):
+  """
+  wrapper around the root-locus plotting functions that returns a set of k's and loci
+  """
+  iin, iout = _handle_iin_iout(input_, output, Hplant)
+
+  if figname is None:
+    figname = suptitle
+
+  if ax is None:
+    fig = plt.figure(aux.figname(figname))
+    ax = fig.add_subplot(111)
+
+    fig.suptitle(suptitle, fontweight="bold", fontsize=12)
+    ax.set_title(title)
+    ax.set_xlabel(r"exponential decay rate ($\sigma$)")
+    if Hz is True:
+      ax.set_ylabel("frequency [Hz]")
+    else:
+      ax.set_ylabel(r"$angular velocity ($\omega$)")
+    ax.grid(True)
+  else:
+    fig = ax.figure
+
+  if title is None:
+    title = "Root-locus for {:0.1e} <= K <= {:0.1e}".format(*klims)
+
+  # determine the in and output names
+  if hasattr(Hplant, 'inputnames'):
+    namein = Hplant.inputnames[iin]
+  else:
+    namein = "input_{:2d}".format(iin)
+
+  if hasattr(Hplant, 'outputnames'):
+    nameout = Hplant.outputnames[iout]
+  else:
+    nameout = "output_{:2d}".format(iout)
+
+  # can be only done for SISO systems (for now)
+  if Hplant.issiso():
+    Hsiso_this = Hplant
+  else:
+    Hsiso_this = make_siso(Hplant, iin, iout)
+
+  if isklog:
+    kvect = np.linspace(*klims, num_k)
+  else:
+    kvect = np.logspace(*np.log10(klims), num_k)
+
+  # add a zero and inf to the list of kvect
+  kvect = np.array([0., *kvect, 1e10], dtype=np.float_)
+
+  if legacy:
+    rlist, klist = cm.root_locus(Hsiso_this)
+    return
+  else:
+    rlist, klist = cm.root_locus(Hsiso_this, kvect=kvect, Plot=False)
+
+  # loop all starting poles (does it work when Nz > Hp)
+  starting_poles = Hsiso_this.pole()
+  colors = aux.jetmod(starting_poles.size, 'vector', bright=True)
+  for ip, pole in enumerate(starting_poles):
+    p_dcay0, p_worf0 = split_s_plane_coords(pole, Hz=Hz)
+
+    label = r"pole @ $\sigma$={:0.1f}, ".format(p_worf0)
+    if Hz:
+      label += "f={:0.1f} [Hz]".format(p_dcay0)
+    else:
+      label += r"$\omega$={:0.1f} [rad/s]".format(p_worf0)
+
+    # get locii
+    dcays, worfs = split_s_plane_coords(rlist[:, ip])
+
+    # plot starting pole
+    # plot lines
+    ax.plot(dcays[-1], worfs[-1], 'o', color=colors[ip, :], linewidth=3, mfc=colors[ip, :],
+            mec=colors[ip, :], markersize=6)
+    ax.plot(dcays[0], worfs[0], 'x', color=colors[ip, :], mew=3, markersize=10)
+    ax.plot(dcays[1:-1], worfs[1:-1], '.-', color=colors[ip, :], linewidth=1)
+    # asdf
+    ax.plot(p_dcay0, p_worf0, 'x', markersize=10, color='k', mew=1)
+
+  if show_legend:
+    ax.legend(fontsize=8, loc='lower left')
+
+  plt.show(block=False)
+
+  return fig, ax
 
 
 def find_valid_states(statenames, states_to_ignore):
@@ -754,7 +879,8 @@ def ignore_states(Hplants, states_to_ignore):
     _ignore_states_single(Hplants, states_to_ignore)
 
 
-def load_state_space_model_file(filename, dirname='.', states_to_ignore=[], dt=0):
+def load_state_space_model_file(filename, dirname='.', states_to_ignore=[], dt=0,
+                                remove_useless=False):
   """
   Load the state space model from a .mat file and return the transfer statespace model of the plant
   """
@@ -800,12 +926,7 @@ def load_state_space_model_file(filename, dirname='.', states_to_ignore=[], dt=0
       C = Cs[..., ivw, iazi]
       D = Ds[..., ivw, iazi]
 
-      Hplant = cm.StateSpace(A, B, C, D, dt, remove_useless=False)
-      # Hplant.A = A.copy()
-      # Hplant.states = A.shape[0]
-      # Hplant.B = B.copy()
-      # Hplant.C = C.copy()
-      # Hplant.D = D.copy()
+      Hplant = cm.StateSpace(A, B, C, D, dt, remove_useless=remove_useless)
       Hplant.inputnames = inputnames
       Hplant.outputnames = outputnames
       Hplant.statenames = statenames
@@ -826,24 +947,28 @@ def load_state_space_model_file(filename, dirname='.', states_to_ignore=[], dt=0
   return Hplants, vwinds, azis
 
 
-def make_siso(Hplant, iinput, ioutput):
+def make_siso(Hplant, input_, output, tag="siso"):
   """
   make a MIMO system into a SISO system
   """
-  iinput, ioutput = _handle_iin_iout(iinput, ioutput, Hplant)
+  input_, output = _handle_iin_iout(input_, output, Hplant)
 
   siso = cm.rss(states=Hplant.states, inputs=1, outputs=1)
   siso.A = Hplant.A.copy()
-  siso.B = Hplant.B[:, iinput].reshape(-1, 1)
-  siso.C = Hplant.C[ioutput, :].reshape(1, -1)
-  siso.D = Hplant.D[ioutput, iinput].reshape(1, 1)
+  siso.B = Hplant.B[:, input_].reshape(-1, 1)
+  siso.C = Hplant.C[output, :].reshape(1, -1)
+  siso.D = Hplant.D[output, input_].reshape(1, 1)
+  siso.is_plant = Hplant.is_plant
+  siso.dt = Hplant.dt
 
   if hasattr(Hplant, 'inputnames'):
-    siso.inputnames = np.array([Hplant.inputnames[iinput],])
+    siso.inputnames = aux.listify(Hplant.inputnames[input_])
   if hasattr(Hplant, 'outputnames'):
-    siso.outputnames = np.array([Hplant.outputnames[ioutput],])
+    siso.outputnames = aux.listify(Hplant.outputnames[output])
   if hasattr(Hplant, 'statenames'):
     siso.statenames = Hplant.statenames
+
+  siso.tag = tag
 
   return siso
 
@@ -962,7 +1087,7 @@ def loadpj(items=None, dirname=None, filenames=None):
   return lcdict
 
 
-def notch(f0, damping_ratio, gain=1., fz=None, dt=0, ss_or_tf='ss'):
+def notch(f0, damping_ratio, gain=1., fz=None, dt=0, force_statespace=True):
   """
   returns the transfer function nof a notch filter
   """
@@ -977,17 +1102,13 @@ def notch(f0, damping_ratio, gain=1., fz=None, dt=0, ss_or_tf='ss'):
 
   out = gain*cm.tf(num, den, dt)
 
-  if ss_or_tf == 'ss':
+  if force_statespace:
     out = cm.tf2ss(out)
-  elif ss_or_tf == 'tf':
-    pass
-  else:
-    raise ValueError("The given value for `ss_or_tf` is not valid ({})".format(ss_or_tf))
 
   return out
 
 
-def bandpass(f0, damping_ratio, gain=1., dt=0, ss_or_tf='ss'):
+def bandpass(f0, damping_ratio, gain=1., dt=0, force_statespace=True):
   """
   create a bandpass filter
   """
@@ -997,14 +1118,35 @@ def bandpass(f0, damping_ratio, gain=1., dt=0, ss_or_tf='ss'):
 
   out = gain*cm.tf(num, den, dt)
 
-  if ss_or_tf == 'ss':
+  if force_statespace:
     out = cm.tf2ss(out)
-  elif ss_or_tf == 'tf':
-    pass
-  else:
-    raise ValueError("The given value for `ss_or_tf` is not valid ({})".format(ss_or_tf))
 
   return out
+
+
+def low_pass_filter(fc, gain=1., force_statespace=True, dt=0.):
+  """
+  define a n-th order low pass filter
+  """
+  omc = f2w(fc)
+  Hlp = cm.tf([gain], [1./omc, 1.])
+  if force_statespace:
+    Hlp = cm.tf2ss(Hlp)
+
+  return Hlp
+
+
+def high_pass_filter(fc, gain=1., dt=0., force_statespace=True):
+  """
+  create a high pass filter
+  """
+  omc = f2w(fc)
+  Hhp = cm.tf([gain/omc, 0], [1./omc, 1])
+
+  if force_statespace:
+    Hhp = cm.tf2ss(Hhp)
+
+  return Hhp
 
 
 def _handle_pid_inputs(**kwargs):
@@ -1063,7 +1205,7 @@ def pidpar(Kp, **kwargs):
   return Hpid
 
 
-def pid(Kp, N=100, form='ideal', ss_or_tf='ss', dt=0., **kwargs):
+def pid(Kp, N=100, form='ideal', force_statespace=True, dt=0., **kwargs):
   """
   PID controller according to the ideal scheme:
   H(s) = P(1 + I/s + D(N/(1 + N/s)))
@@ -1082,7 +1224,7 @@ def pid(Kp, N=100, form='ideal', ss_or_tf='ss', dt=0., **kwargs):
                               " implemented yet")
 
   Hpid.dt = dt
-  if ss_or_tf == 'ss':
+  if force_statespace:
     Hpid = cm.tf2ss(Hpid)
 
   return Hpid
@@ -1100,3 +1242,15 @@ def w2f(omega):
   convert angular frequencies in frequencies
   """
   return omega/(2*np.pi)
+
+
+def split_s_plane_coords(s_coords, Hz=False):
+  """
+  split any s plane coordinates into dcay and frequency
+  """
+  if Hz:
+    sfy = 1./(2*np.pi)
+  else:
+    sfy = 1.
+
+  return aux.split_complex(s_coords, sfx=1, sfy=sfy)
