@@ -1040,23 +1040,76 @@ def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, p
   return Hsys
 
 
-def replace_io_strings(Hplant, replacements, show_warnings=False):
+def modify_plant(Hplant, what2mod, replace=None, rename=None, reorder=None, remove=None):
   """
-  modifiy entries in the list by the replacements
+  modify part of the plant
   """
-  outlists = (Hplant.inputnames.copy(), Hplant.outputnames.copy())
-  nameslists = outlists
-  for outlist, nameslist in zip(outlists, nameslists):
-    for repl in replacements:
-      try:
-        ifnd = aux.find_elm_containing_substrs(repl[0], nameslist, nreq=1, strmatch="all")
-        outlist[ifnd] = repl[1]
-      except Exception:
-        if show_warnings:
-          warn("nothing found for `{}` in {}".format(repl[0], nameslist))
+  if not hasattr(Hplant, what2mod):
+    raise ValueError("The plant does not have an attribute `{}`".format(what2mod))
 
-  Hplant.inputnames = outlists[0].copy()
-  Hplant.outputnames = outlists[1].copy()
+  dimdict = dict.fromkeys(['A', 'B', 'C', 'D'], [])
+  if what2mod == 'states':
+    nameattr = 'statenames'
+    dimdict['A'] = [0, 1]
+    dimdict['B'] = [0]
+    dimdict['C'] = [1]
+  elif what2mod == 'inputs':
+    nameattr = 'inputnames'
+    dimdict['B'] = [1]
+    dimdict['D'] = [1]
+  elif what2mod == 'outputs':
+    nameattr = 'outputnames'
+    dimdict['C'] = [0]
+    dimdict['D'] = [0]
+
+  # 1: removing states
+  irem = aux.find_elm_containing_substrs(remove, getattr(Hplant, nameattr))
+  ikeep = np.setdiff1d(np.r_[:getattr(Hplant, what2mod)], irem)
+
+  # update states/inputs/outputs
+  setattr(Hplant, what2mod, ikeep.size)
+  # update names
+  setattr(Hplant, nameattr, getattr(Hplant, nameattr)[ikeep])
+
+  # update matrices
+  for matid in dimdict.keys():
+    mdata = getattr(Hplant, matid)
+    if 0 in dimdict[matid]:
+      mdata = mdata[ikeep, :]
+    if 1 in dimdict[matid]:
+      mdata = mdata[:, ikeep]
+
+    # set modified matrix to Hplant
+    setattr(Hplant, matid, mdata)
+
+  # 2: replace and rename
+  setattr(Hplant, nameattr,
+          aux.arrayify(aux.modify_strings(getattr(Hplant, nameattr), globs=replace, specs=rename)))
+
+  # 3: reorder
+  if reorder is not None:
+    nof_elms = getattr(Hplant, what2mod)
+    if len(reorder) != nof_elms:
+      raise ValueError("The number of elements in `reorder` ({:d}) is not matching the number of".
+                       format(len(reorder)) + " outputs ({:d}".format(nof_elms))
+
+    isort = np.ones((nof_elms), dtype=int)
+    for ielm, str_ in enumerate(reorder):
+      isort[ielm] = aux.find_elm_containing_substrs(str_, getattr(Hplant, nameattr), nreq=1,
+                                                    raise_except=False, strmatch='all')
+
+    # update matrices
+    for matid in dimdict.keys():
+      mdata = getattr(Hplant, matid)
+      if 0 in dimdict[matid]:
+        mdata = mdata[isort, :]
+      if 1 in dimdict[matid]:
+        mdata = mdata[:, isort]
+
+      # set modified matrix to Hplant
+      setattr(Hplant, matid, mdata)
+
+    setattr(Hplant, nameattr, getattr(Hplant, nameattr)[isort])
 
 
 def make_block(btype, tag, dt=0., inames=None, onames=None, force_statespace=True,
