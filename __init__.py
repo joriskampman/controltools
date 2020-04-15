@@ -466,7 +466,7 @@ class RootLocus(object):
     plt.draw()
 
 
-def plot_state_space_matrices(ss, plottype='normal', show_values=False, zero_marker=None,
+def plot_state_space_matrices(ss, display_type='compressed', show_values=True, zero_marker=None,
                               show_names=True, split_plots=False, aspect='auto', cmap=None,
                               suptitle=None, maximize=True):
   """
@@ -476,7 +476,7 @@ def plot_state_space_matrices(ss, plottype='normal', show_values=False, zero_mar
   ----------
   ss : control.StateSpace object
        The state-space objects for which the figure(s) has(have) to be made
-  plottype : [ 'normal', 'binary', 'posneg', 'compressed'], default='normal'
+  display_type : [ 'normal', 'binary', 'posneg', 'compressed'], default='normal'
              A plot type which indicates how the matrices should be plotted. Options are:
              - 'normal': just the values as is
              - 'binary': boolean value to indicate whether a value is zero or nonzero
@@ -497,7 +497,7 @@ def plot_state_space_matrices(ss, plottype='normal', show_values=False, zero_mar
           Aspect ratio flag, is passed to the call of *imshow*
   cmap : [ None | ... ], default=None
          Colormap instance or None. In case `None`, the function will decide the colormap based
-         om the plottype. The value if not None is passed to the *imshow* function as kwarg.
+         om the display_type. The value if not None is passed to the *imshow* function as kwarg.
   suptitle : [None | str ], default=None
              Figure's suptitle, passed to the figure
 
@@ -507,9 +507,29 @@ def plot_state_space_matrices(ss, plottype='normal', show_values=False, zero_mar
             Depending on the *split_plots* flag the output is either a tuple of tuples
             (one per figure), or a tuple of the figure and the axes
   """
+  def _labelmaker(fmtstr, nameslist):
+    """
+    subfunction to make the labels
+    """
+    lablist = [fmtstr.format(str_, idx) for idx, str_ in enumerate(nameslist)]
+    return lablist
 
   div_cmap = 'bwr'
   bin_cmap = 'traffic_light'
+
+  matdict = dict()
+  matdict['A'] = dict(plot_yticks=True,
+                      rowlabels=_labelmaker("d({:s})/dt - {:2d}", ss.statenames),
+                      collabels=_labelmaker("{:s} - {:2d}", ss.statenames))
+  matdict['B'] = dict(plot_yticks=split_plots,
+                      rowlabels=_labelmaker("d({:s})/dt - {:2d}", ss.statenames),
+                      collabels=_labelmaker("{:s} - {:2d}", ss.inputnames))
+  matdict['C'] = dict(plot_yticks=True,
+                      rowlabels=_labelmaker("{:s} - {:2d}", ss.outputnames),
+                      collabels=_labelmaker("{:s} - {:2d}", ss.statenames))
+  matdict['D'] = dict(plot_yticks=split_plots,
+                      rowlabels=_labelmaker("{:s} - {:2d}", ss.outputnames),
+                      collabels=_labelmaker("{:s} - {:2d}", ss.inputnames))
 
   if not isinstance(ss, cm.StateSpace):
     raise ValueError("The input argument `ss` is not of type cm.StateSpace")
@@ -518,7 +538,7 @@ def plot_state_space_matrices(ss, plottype='normal', show_values=False, zero_mar
   kwargs = dict(aspect=aspect, cmap=cmap)
   if cmap is None:
     kwargs['cmap'] = div_cmap
-    if plottype == 'binary':
+    if display_type == 'binary':
       kwargs['cmap'] = bin_cmap
   else:
     kwargs['cmap'] = div_cmap
@@ -530,9 +550,9 @@ def plot_state_space_matrices(ss, plottype='normal', show_values=False, zero_mar
       mng = plt.get_current_fig_manager()
       mng.window.showMaximized()
 
-  for iplot, matstr in enumerate(['A', 'B', 'C', 'D']):
+  for iplot, (key, mdict) in enumerate(matdict.items()):
     if split_plots:
-      fig, ax = plt.subplots(1, 1, num=aux.figname("{:s} matrix".format(matstr)))
+      fig, ax = plt.subplots(1, 1, num=aux.figname("{:s} matrix".format(key)))
       if maximize:
         mng = plt.get_current_fig_manager()
         mng.window.showMaximized()
@@ -542,33 +562,36 @@ def plot_state_space_matrices(ss, plottype='normal', show_values=False, zero_mar
       ax = axs[np.unravel_index(iplot, (2, 2))]
 
     # get matrix data
-    matdata = getattr(ss, matstr)
-    if plottype == 'normal':
+    matdata = getattr(ss, key)
+    if display_type == 'normal':
       matdisp = matdata.copy()
       minval = matdisp.min()
       maxval = matdisp.max()
       maxext = np.fmax(np.abs(minval), np.abs(maxval))
       kwargs.update(vmin=-maxext, vmax=maxext)
-    elif plottype == 'binary':
+    elif display_type == 'binary':
       matdisp = np.int_(~np.isclose(0., matdata))
-    elif plottype == 'compressed':
+    elif display_type == 'compressed':
       matdisp = np.tanh(matdata)
       kwargs.update(vmin=-1., vmax=1.)
-    elif plottype == 'posneg':
+    elif display_type == 'posneg':
       matdisp = np.sign(matdata)
     else:
-      raise ValueError("The *plottype* keyword argument value ({}) is not valid.".format(plottype))
+      raise ValueError("The *display_type* keyword argument value ({}) is not valid.".
+                       format(display_type))
 
     nr, nc = matdata.shape
 
     ax.imshow(matdisp, **kwargs)
 
     # set title, grid and labels
-    ax.set_title("{:s} [{:d} x {:d}]".format(matstr, nr, nc))
-    ax.set_yticks(np.r_[:nr])
+    ax.set_title("{:s} [{:d} x {:d}]".format(key, nr, nc))
     ax.set_xticks(np.r_[:nc])
-    ax.set_yticklabels(matdata.rownames.copy(), fontsize=7)
-    ax.set_xticklabels(matdata.colnames.copy(), fontsize=7, rotation=45, va='top', ha='right')
+    ax.set_xticklabels(mdict['collabels'], fontsize=7, rotation=45, va='top', ha='right')
+    ax.set_yticks([])
+    if mdict['plot_yticks']:
+      ax.set_yticks(np.r_[:nr])
+      ax.set_yticklabels(mdict['rowlabels'], fontsize=7)
     ax.tick_params(axis='both', which='major', length=0)
 
     # make minor ticks for dividing lines
@@ -576,8 +599,6 @@ def plot_state_space_matrices(ss, plottype='normal', show_values=False, zero_mar
     ax.set_yticks(np.r_[-0.5:nr+0.5:1], minor=True)
 
     ax.grid(which='minor', linewidth=1)
-
-    # add markers and values if wanted
 
     # show the values in the matrix
     if show_values:
