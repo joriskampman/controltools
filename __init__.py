@@ -1647,14 +1647,6 @@ def load_state_space_model_file(filename, dirname='.', states_to_ignore=[], dt=0
       Hplant.outputnames = outputnames
       Hplant.statenames = statenames
       Hplant.wind_speed = vwind
-      Hplant.A.rownames = np.array(["d({:s})/dt".format(statename) for statename in statenames])
-      Hplant.A.colnames = statenames
-      Hplant.B.rownames = statenames
-      Hplant.B.colnames = inputnames
-      Hplant.C.rownames = outputnames
-      Hplant.C.colnames = statenames
-      Hplant.D.rownames = outputnames
-      Hplant.D.colnames = inputnames
       Hplant.azimuth = azi
       Hplant.ref_generator_speed = ssmat['NomSpeedArray'][ivw, iazi]
       Hplant.ref_rotor_speed = ssmat['RotorSpeeds'][0, ivw]
