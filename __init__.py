@@ -719,7 +719,7 @@ def plot_single_plant_bodes(Hplant, inputs=None, outputs=None, omega_limits=[1e-
   return fig, axs
 
 
-def plot_root_locus(Hplant, input_=0, output=0, centered=True, klims=[0.01, 100], num_k=1e3,
+def plot_root_locus(Hplant, input_=0, output=0, use_ref=True, klims=[0.01, 100], num_k=1e3,
                     klist=None, isklog=True, figname=None, suptitle="Root-locus", ax=None,
                     legacy=False, title=None, Hz=False, show_legend=True, xlim=None, ylim=None):
   """
@@ -747,17 +747,6 @@ def plot_root_locus(Hplant, input_=0, output=0, centered=True, klims=[0.01, 100]
 
   if title is None:
     title = "Root-locus for {:0.1e} <= K <= {:0.1e}".format(*klims)
-
-  # determine the in and output names
-  if hasattr(Hplant, 'inputnames'):
-    namein = Hplant.inputnames[iin]
-  else:
-    namein = "input_{:2d}".format(iin)
-
-  if hasattr(Hplant, 'outputnames'):
-    nameout = Hplant.outputnames[iout]
-  else:
-    nameout = "output_{:2d}".format(iout)
 
   # can be only done for SISO systems (for now)
   if Hplant.issiso():
