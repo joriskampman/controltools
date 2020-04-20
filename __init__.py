@@ -13,7 +13,664 @@ import control as cm
 from scipy.io import loadmat
 from warnings import warn  # noqa
 import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
 import pdb  # noqa
+import sys
+
+
+class RootLocus(object):
+  """
+  The root-locus class which can not only display the root-locus for a system, but also has some
+  slight interactivity
+  """
+  # plot properties
+  min_markersize = 0.5
+  max_markersize = 40
+
+  ctrl_jump_perc = 2.5
+  nof_K = 2001
+  K_start_pow10 = -2
+  K_end_pow10 = 8
+  sfmax_K = 2.
+  plot_pz = True
+  plot_ref = False
+
+  nof_zeta_lines = 11
+  olines = None
+  otxts = None
+  Hz = True
+  K_base = 1.
+  iselect = None
+
+  def __init__(self, G, C=1., Plot=True, order_of_coef_to_check=0, is_relative=False,
+               K_ref=1., **kwargs):
+    # Define the feedback system with a PI as C
+
+    # make forward path (connect C and G)
+    # preprocess plant to become siso and get generic input and outputnames
+    if not G.issiso():
+      raise ValueError("The input plant (G) must be a SISO system!")
+
+    if isinstance(G, cm.TransferFunction):
+      G = cm.tf2ss(G)
+
+    if isinstance(C, (float, int)):
+      C = cm.tf2ss(cm.tf(float(C), 1.))
+    elif isinstance(C, cm.TransferFunction):
+      C = cm.tf2ss(C)
+
+    self.G = G
+    self.C = C
+    self.dt = G.dt
+
+    for key, val in kwargs.items():
+      setattr(self, key, val)
+
+    if Plot:
+      self.plot(order_of_coef_to_check=order_of_coef_to_check,
+                is_relative=is_relative,
+                K_ref=K_ref)
+    else:
+      self.calc_roots()
+
+  def on_pick(self, event):
+    """
+    lkjasdf
+    """
+    if event.mouseevent.button == 3:  # remove selection
+      self.clear_selected_points()
+    elif event.mouseevent.button == 1:
+      self.iselect = (np.mean(event.ind) + 0.5).astype(int)
+      self.plot_selected_points()
+
+  def on_view_change(self, event):
+    """
+    view is changed, change zeta axes
+    """
+    self.plot_zeta_lines(is_update=True)
+
+  def on_key_press(self, event):
+    """
+    adsfasdf
+    """
+    if self.iselect is None:
+      return
+
+    if event.key == 'up':
+      self.iselect += 1
+    elif event.key == 'down':
+      self.iselect -= 1
+    elif event.key == 'ctrl+up':
+      self.iselect += np.fmax(1, np.int(self.ctrl_jump_perc*self.nof_K/100))
+    elif event.key == 'ctrl+down':
+      self.iselect -= np.fmax(1, np.int(self.ctrl_jump_perc*self.nof_K/100))
+    elif event.key == 'end':
+      self.iselect = self.nof_K - 1
+    elif event.key == 'home':
+      self.iselect = 0
+    elif event.key in ('delete', 'backspace'):
+      self.clear_selected_points()
+    else:
+      return
+
+    # prevent out of bounds errors
+    if self.iselect < 0:
+      self.iselect = 0
+    elif self.iselect >= self.nof_K:
+      self.iselect = self.nof_K - 1
+
+    self.plot_selected_points()
+
+  def clear_selected_points(self):
+    """
+    clear the selected points
+    """
+    self.iselect = None
+    for clart in self.clarts:
+      clart.set_visible(False)
+    self.ax.set_title(None)
+    self.fig.tight_layout()
+    plt.draw()
+
+  def plot_selected_points(self):
+    """
+    plot or update the selected points
+    """
+    # get data for all rl's for this K value
+    dcays_arr, worfs_arr = split_s_plane_coords(self.rootsarr, self)
+    K = self.Ks[self.iselect]
+    sigmas_this_K = dcays_arr[self.iselect, :]
+    worfs_this_K = worfs_arr[self.iselect, :]
+
+    # start the new title string
+    titlestr = "<< Closed-loop is "
+    if np.alltrue(sigmas_this_K < 0.):
+      titlestr += r"$\mathbf{STABLE}$"
+      titlecolor = 'k'
+    else:
+      titlestr += r"$\mathbf{UNSTABLE}$"
+      titlecolor = 'r'
+    titlestr += " >>\n"
+    titlestr += "Gain (K) = {:0.1e}".format(K)
+
+    # loop all root-locus plots
+    for ipole in range(dcays_arr.shape[1]):
+
+      # get the numbers
+      sigma = sigmas_this_K[ipole]
+      worf = worfs_this_K[ipole]
+
+      # show the clarts
+      self.clarts[ipole].set_xdata(sigma)
+      self.clarts[ipole].set_ydata(worf)
+      self.clarts[ipole].set_visible(True)
+
+      # derive zeta
+      zeta = np.cos(np.arctan(worf/-sigma))
+
+      # append to title string
+      if self.Hz:
+        worf_str_part = "$f_d$ = {:0.4f} [Hz]".format(worf)
+      else:
+        worf_str_part = "$\\omega_d$ = {:0.4f} [rad/s]".format(worf)
+      titlestr += ("\n({:d}) $\\zeta$ = {:0.2f}, $\\sigma$ =  {:0.2f}, {:s}".
+                   format(ipole, zeta, sigma, worf_str_part))
+
+    self.ax.set_title(titlestr, color=titlecolor, fontsize=8)
+    self.fig.tight_layout()
+    plt.draw()
+    plt.pause(1e-6)
+
+  def calc_zeta_line_thetas(self):
+    """
+    define the zeta line theta angles (which are the angles relative to the negative x axis)
+    """
+    ax = self.ax
+
+    thetas = []
+    xlims = aux.arrayify(ax.get_xlim())
+    ylims = aux.arrayify(ax.get_ylim())
+
+    for x in xlims:
+      for y in ylims:
+        # calculate angle theta
+        theta = np.arctan2(y, -x)
+        thetas.append(theta)
+
+    thetas = np.array(thetas)
+    thetas[np.isclose(thetas, np.pi)] = 0.
+
+    thetas[thetas > np.pi/2] = np.pi/2
+    thetas[thetas < -np.pi/2] = -np.pi/2
+
+    # get the minimum theta for this window and the maximum
+    theta_min = thetas.min()
+    theta_max = thetas.max()
+
+    # define thetas -> discard corner points after linspace'ing
+    thetas = np.array(np.linspace(theta_min, theta_max, self.nof_zeta_lines))
+
+    return thetas
+
+  def plot_zeta_lines(self, is_update=False):
+    """
+    plot the lines of constant zeta (damping ratio) values
+    """
+    # now divide this section in plot angles
+    ax = self.ax
+    xlims = aux.arrayify(ax.get_xlim())
+    ylims = aux.arrayify(ax.get_ylim())
+    if not is_update:
+      self.olines = [None]*self.nof_zeta_lines
+      self.otxts = [None]*self.nof_zeta_lines
+
+    # recalculate the thetas to display
+    disp_thetas = self.calc_zeta_line_thetas()
+
+    for iline, disp_theta in enumerate(disp_thetas[1:-1]):
+      rc = np.tan(np.pi - disp_theta)
+      # calculate points for the 4 limits (2x x, 2x y)
+      if np.isclose(np.pi/2, np.abs(disp_theta)):
+        xs_line = aux.arrayify((0., 0.))
+        if disp_theta < 0.:
+          ys_line = aux.arrayify([0., ylims[0]])
+        else:
+          ys_line = aux.arrayify([0, ylims[1]])
+      else:
+        ys_at_xlims = rc*xlims
+        xs_at_ylims = ylims/rc
+
+        xs_lines_all = np.concatenate((xlims, xs_at_ylims))
+        ys_lines_all = np.concatenate((ys_at_xlims, ylims))
+
+        # keep the points that are in the limits
+        is_valid_x = (xs_lines_all >= xlims[0])*(xs_lines_all <= xlims[1])
+        is_valid_y = (ys_lines_all >= ylims[0])*(ys_lines_all <= ylims[1])
+        is_valid_pt = is_valid_x*is_valid_y
+
+        xs_line = xs_lines_all[is_valid_pt]
+        ys_line = ys_lines_all[is_valid_pt]
+
+      # plot only the part in the LHP
+      is_in_rhp = xs_line > 0.0001
+      ys_line[is_in_rhp] = 0.
+      xs_line[is_in_rhp] = 0.
+
+      # is exit at xlimit?
+      xtxt = xs_line.mean()
+      ytxt = ys_line.mean()
+
+      # plot the line1
+      if is_update:
+        self.olines[iline].set_xdata(xs_line)
+        self.olines[iline].set_ydata(ys_line)
+      else:
+        oline, = ax.plot(xs_line, ys_line, 'k:', linewidth=1, zorder=1)
+        self.olines[iline] = oline
+
+      # calculate the damping ratio (zeta)
+      zeta = np.cos(disp_theta)
+      txt = r"$\zeta$ = {:0.2f}".format(zeta)
+      # txt = "{:0.2f}".format(zeta)
+
+      trans_angle = (180. +
+                     ax.transData.transform_angles(np.array((np.rad2deg(np.pi - disp_theta),)),
+                                                   np.array([xtxt, ytxt]).reshape((1, 2)))[0])
+
+      if is_update:
+        self.otxts[iline].set_position((xtxt, ytxt))
+        self.otxts[iline].set_text(txt)
+        self.otxts[iline].set_rotation(trans_angle)
+      else:
+        self.otxts[iline] = ax.text(xtxt, ytxt, txt, ha='center', va='center',
+                                    fontweight='bold', fontsize='x-small', rotation=trans_angle,
+                                    rotation_mode='anchor', backgroundcolor='w',
+                                    bbox=dict(facecolor='w', boxstyle='round', pad=0.3))
+
+    self.fig.tight_layout()
+    plt.draw()
+    plt.show(block=False)
+    self.fig.tight_layout()
+    plt.draw()
+
+  def create_augmented_C(self, order_of_coef_to_check):
+    """
+    iorder2check is the coefficient of the s order to check
+    """
+    C_num = cm.ss2tf(self.C).num[0][0]
+    C_den = cm.ss2tf(self.C).den[0][0]
+
+    K_base = C_num[-1 - order_of_coef_to_check]
+
+    C_aug = make_block('tfdata', 'Ctq_aug', dt=self.dt, num=C_num/K_base, den=C_den,
+                       keep_names=True)
+
+    self.C_aug = C_aug
+    self.K_base = K_base
+
+  def calc_roots(self, order_of_coef_to_check=1, is_relative=False):
+    """
+    calculate the roots -> called on plotting
+    """
+    # augment C to check K for a single coefficient
+    self.create_augmented_C(order_of_coef_to_check)
+
+    if is_relative:
+      pows_K = np.linspace(-1, 1., self.nof_K)
+      sfs_K = self.sfmax_K**pows_K
+      Ks = self.K_base*sfs_K
+    else:
+      Ks = np.logspace(self.K_start_pow10, self.K_end_pow10, self.nof_K)
+
+    CG_aug = build_system([self.C_aug, self.G], tag="CG_aug", prune=True).minreal()
+
+    # get poles and zeros (from minreal system)
+    poles = CG_aug.pole()
+    zeros = CG_aug.zero()
+    nof_zeros = zeros.size
+    nof_poles = poles.size
+    nof_roots = np.fmax(nof_zeros, nof_poles)
+
+    nof_infs = nof_roots - np.fmin(nof_zeros, nof_poles)
+
+    # calculate P and Q from 1 + KCG = 1 + k(Q/P) =0
+    P = cm.ss2tf(CG_aug).den[0][0]
+    Q = np.zeros_like(P)  # init to have the same dimensions as P
+    Q_ = cm.ss2tf(CG_aug).num[0][0]
+    Q[nof_infs:] = Q_
+
+    # initialize the roots
+    # loop all K values (slow, but for now that's OK)
+    rootsarr = np.empty((self.nof_K, nof_roots), dtype=np.complex_)
+    prev_roots = np.roots(P)
+    for ik, K in enumerate(Ks):
+      fchar = P + K*Q
+      roots = np.roots(fchar)
+      # check the order of the roots
+
+      # roots may change position -> correct for this
+      # 1. make delta matrix and find the minimum per column
+      deltas = np.abs(prev_roots.reshape(-1, 1) - roots.reshape(1, -1))
+      indices = np.argmin(deltas, axis=1)
+
+      # in case double indices occur -> make random choice via noise matrix
+      # while loop necessary in case noise matrix is not decisive
+      while np.diff(indices).prod() == 0:
+        # doesn't matter, pick one via random permutation
+        indices = np.argmin(deltas*np.random.random((nof_roots, nof_roots)), axis=1)
+
+      # add these to the list
+      rootsarr[ik, :] = roots[indices]
+      prev_roots = rootsarr[ik, :]
+
+    # find which locus is going to infinity
+    inotinfs = np.r_[:nof_roots]
+    if not is_relative:
+      deltas_zeros = np.abs(roots[indices].reshape(-1, 1) - zeros.reshape(1, -1))
+      mindist_to_zeros = np.min(deltas_zeros, axis=1)
+      isort = np.argsort(mindist_to_zeros)[-1::-1]  # invert to sort from large to small
+      iinfs = isort[:nof_infs]
+      inotinfs = np.setdiff1d(np.r_[:nof_roots], iinfs)
+
+    # add stuff to this object
+    self.poles = poles
+    self.zeros = zeros
+    self.nof_roots = nof_roots
+    self.Ks = Ks
+    self.rootsarr = rootsarr
+    self.inotinfs = inotinfs
+
+    return split_s_plane_coords(rootsarr, Hz=self.Hz)
+
+  def plot(self, order_of_coef_to_check=1, is_relative=False, K_ref=1.):
+    '''
+    plot the root-locus
+    '''
+    if is_relative:
+      iref = self.nof_K//2
+      plot_ref = True
+      plot_pz = False
+    else:
+      plot_ref = False
+      plot_pz = True
+
+    dcays_arr, worfs_arr = self.calc_roots(order_of_coef_to_check=order_of_coef_to_check,
+                                           is_relative=is_relative)
+
+    nof_poles = self.poles.size
+    nof_zeros = self.zeros.size
+
+    nof_roots = np.fmax(nof_poles, nof_zeros)
+
+    # determine x and y limits
+    xlims = aux.arrayify(aux.bracket(dcays_arr[:, self.inotinfs]))
+    ylims = aux.arrayify(aux.bracket(worfs_arr[:, self.inotinfs]))
+
+    dists = np.abs(np.diff(self.rootsarr, axis=0))
+    cdists = np.cumsum(dists, axis=0)
+    cdistsn = cdists/cdists[-1, :]
+    cdistsn_ = np.vstack((np.zeros((1, nof_poles), dtype=np.float_), cdistsn))
+    sizearr = aux.data_scaling(cdistsn_, self.min_markersize, self.max_markersize, func='linear')
+
+    self.fig = plt.figure(aux.figname("root-locus"))
+    self.ax = self.fig.add_subplot(111)
+    self.ax.grid(True)
+
+    colors = aux.jetmod(nof_roots, 'vector', bright=True)
+    iipoles = np.argmin(np.abs(self.rootsarr[0, :].reshape(-1, 1) - self.poles.reshape(1, -1)),
+                        axis=0)
+    iizeros = np.argmin(np.abs(self.rootsarr[-1, :].reshape(-1, 1) - self.zeros.reshape(1, -1)),
+                        axis=0)
+    clarts = [None]*nof_roots
+    for iroot, (dcays, worfs) in enumerate(zip(dcays_arr.T, worfs_arr.T)):
+      is_valid_x = (dcays >= xlims[0])*(dcays <= xlims[1])
+      is_valid_y = (worfs >= ylims[0])*(worfs <= ylims[1])
+      is_valid = is_valid_x*is_valid_y
+
+      colvec = aux.color_vector(self.nof_K, colors[iroot, :], os=0.35)
+      cmap = ListedColormap(colvec, name="root_locus_p{:d}".format(iroot))
+      self.ax.plot(dcays[is_valid], worfs[is_valid], '-', color=colors[iroot, :], linewidth=0.5,
+                   picker=False, zorder=1)
+      self.ax.scatter(dcays[is_valid], worfs[is_valid], s=sizearr[is_valid, iroot],
+                      c=sizearr[is_valid, iroot], cmap=cmap, marker='o', picker=True,
+                      label="pole {:d}".format(iroot), zorder=3)
+
+      if plot_ref:
+        self.ax.plot(dcays_arr[iref, iroot], worfs_arr[iref, iroot], '*', mew=2, mfc='none',
+                     markersize=20, mec=colors[iroot, :], zorder=2)
+      # plot poles and zeros if flag is on
+      if plot_pz:
+        self.ax.plot(*split_s_plane_coords(self.poles[iipoles[iroot]], Hz=self.Hz), 'x', mew=2,
+                     mfc='none', markersize=15, mec=colors[iroot, :], zorder=2)
+      # plot clicked on artists (clarts)
+      clarts[iroot], = self.ax.plot(0., 0., 's', mec='k', mfc='none', markersize=15, mew=3,
+                                    visible=False, zorder=10)
+
+    if plot_pz:
+      for izero in range(nof_zeros):
+        self.ax.plot(*split_s_plane_coords(self.zeros[izero], Hz=self.Hz), 'o', mew=2,
+                     mfc='none', markersize=15, mec=colors[iizeros[izero], :], zorder=3)
+
+    # add the zeta lines
+    self.plot_zeta_lines(False)
+    self.clarts = clarts
+    self.is_update = True
+
+    self.cid1 = self.fig.canvas.mpl_connect('pick_event', self.on_pick)
+    self.cid2 = self.ax.callbacks.connect('xlim_changed', self.on_view_change)
+    self.cid3 = self.ax.callbacks.connect('ylim_changed', self.on_view_change)
+    self.cid4 = self.fig.canvas.mpl_connect('resize_event', self.on_view_change)
+    self.cid5 = self.fig.canvas.mpl_connect('key_press_event', self.on_key_press)
+
+    plt.show(block=False)
+    plt.draw()
+
+
+def plot_state_space_matrices(ss, display_type='compressed', show_values=True, zero_marker=None,
+                              show_names=True, split_plots=False, aspect='auto', cmap=None,
+                              suptitle=None, maximize=True):
+  """
+  plot all 4 state-space matrices including enumerated ticks
+
+  arguments:
+  ----------
+  ss : control.StateSpace object
+       The state-space objects for which the figure(s) has(have) to be made
+  display_type : [ 'normal', 'binary', 'posneg', 'compressed'], default='normal'
+             A plot type which indicates how the matrices should be plotted. Options are:
+             - 'normal': just the values as is
+             - 'binary': boolean value to indicate whether a value is zero or nonzero
+             - 'posneg': gives a color depending on whether it is negative, zero or positive
+             - 'compressed': uses a hyperbolic tangent to compress the values to a range of [-1, 1]
+  show_values : boolean, default=False
+                Flag to indicate whether to display the TRUE values in the matrices. The format
+                will be the `general` ({:g}) format
+  zero_marker : [ None | str ], default=None
+                Determines how to display the zeroes in the matrix. None will display nothing and
+                in case of a string, every zero value will be marked as provided.
+                Note that `show_values` and `zero_marker` work independently
+  show_names: bool, default=True
+              flag to indicate whether to show the names (state, input, output) as tick labels
+  split_plots : bool, default=False
+                flag to indicate whether to split the plots or to make one big 2x2 subplot figure
+  aspect: ['auto' | 'equal'], default='auto'
+          Aspect ratio flag, is passed to the call of *imshow*
+  cmap : [ None | ... ], default=None
+         Colormap instance or None. In case `None`, the function will decide the colormap based
+         om the display_type. The value if not None is passed to the *imshow* function as kwarg.
+  suptitle : [None | str ], default=None
+             Figure's suptitle, passed to the figure
+
+  Returns:
+  --------
+  fig, ax : [tuple of tuples | tuple]
+            Depending on the *split_plots* flag the output is either a tuple of tuples
+            (one per figure), or a tuple of the figure and the axes
+  """
+  def _labelmaker(fmtstr, nameslist):
+    """
+    subfunction to make the labels
+    """
+    lablist = [fmtstr.format(str_, idx) for idx, str_ in enumerate(nameslist)]
+    return lablist
+
+  div_cmap = 'bwr'
+  bin_cmap = 'traffic_light'
+
+  matdict = dict()
+  matdict['A'] = dict(show_x_labels=split_plots,
+                      show_y_labels=True,
+                      rowlabels=_labelmaker("d({:s})/dt - {:2d}", ss.statenames),
+                      collabels=_labelmaker("{:s} - {:2d}", ss.statenames))
+  matdict['B'] = dict(show_x_labels=split_plots,
+                      show_y_labels=split_plots,
+                      rowlabels=_labelmaker("d({:s})/dt - {:2d}", ss.statenames),
+                      collabels=_labelmaker("{:s} - {:2d}", ss.inputnames))
+  matdict['C'] = dict(show_x_labels=True,
+                      show_y_labels=True,
+                      rowlabels=_labelmaker("{:s} - {:2d}", ss.outputnames),
+                      collabels=_labelmaker("{:s} - {:2d}", ss.statenames))
+  matdict['D'] = dict(show_x_labels=True,
+                      show_y_labels=split_plots,
+                      rowlabels=_labelmaker("{:s} - {:2d}", ss.outputnames),
+                      collabels=_labelmaker("{:s} - {:2d}", ss.inputnames))
+
+  if not isinstance(ss, cm.StateSpace):
+    raise ValueError("The input argument `ss` is not of type cm.StateSpace")
+
+  # determine the colormap
+  kwargs = dict(aspect=aspect, cmap=cmap)
+  if cmap is None:
+    kwargs['cmap'] = div_cmap
+    if display_type == 'binary':
+      kwargs['cmap'] = bin_cmap
+  else:
+    kwargs['cmap'] = div_cmap
+
+  if not split_plots:
+    fig, axs = plt.subplots(2, 2, num=aux.figname("State-space overview"), sharex=False,
+                            sharey=False)
+    if maximize:
+      mng = plt.get_current_fig_manager()
+      mng.window.showMaximized()
+
+  for iplot, (key, mdict) in enumerate(matdict.items()):
+    if split_plots:
+      fig, ax = plt.subplots(1, 1, num=aux.figname("{:s} matrix".format(key)))
+      if maximize:
+        mng = plt.get_current_fig_manager()
+        mng.window.showMaximized()
+      fig.tight_layout()
+
+    else:
+      ax = axs[np.unravel_index(iplot, (2, 2))]
+
+    # get matrix data
+    matdata = getattr(ss, key)
+    if display_type == 'normal':
+      matdisp = matdata.copy()
+      minval = matdisp.min()
+      maxval = matdisp.max()
+      maxext = np.fmax(np.abs(minval), np.abs(maxval))
+      kwargs.update(vmin=-maxext, vmax=maxext)
+    elif display_type == 'binary':
+      matdisp = np.int_(~np.isclose(0., matdata))
+    elif display_type == 'compressed':
+      matdisp = np.tanh(matdata)
+      kwargs.update(vmin=-1., vmax=1.)
+    elif display_type == 'posneg':
+      matdisp = np.sign(matdata)
+    else:
+      raise ValueError("The *display_type* keyword argument value ({}) is not valid.".
+                       format(display_type))
+
+    nr, nc = matdata.shape
+
+    ax.imshow(matdisp, **kwargs)
+
+    # set title, grid and labels
+    ax.set_title("{:s} [{:d} x {:d}]".format(key, nr, nc))
+    ax.set_xticks(np.r_[:nc])
+    ax.set_xticklabels(ax.get_xticks(), fontsize=7)
+    if mdict['show_x_labels']:
+      ax.set_xticklabels(mdict['collabels'], fontsize=7, rotation=45, va='top', ha='right')
+    ax.set_yticks(np.r_[:nr])
+    ax.set_yticklabels(ax.get_yticks(), fontsize=7)
+    if mdict['show_y_labels']:
+      ax.set_yticklabels(mdict['rowlabels'], fontsize=7)
+    ax.tick_params(axis='both', which='major', length=0)
+
+    # make minor ticks for dividing lines
+    ax.set_xticks(np.r_[-0.5:nc+0.5:1], minor=True)
+    ax.set_yticks(np.r_[-0.5:nr+0.5:1], minor=True)
+
+    ax.grid(which='minor', linewidth=1)
+
+    # show the values in the matrix
+    if show_values:
+      for irow in range(nr):
+        for icol in range(nc):
+          if not np.isclose(matdata[irow, icol], 0.):
+            ax.text(icol, irow, "{:.1g}".format(matdata[irow, icol]), fontsize=6, ha='center',
+                    va='center', clip_on=True, bbox={'boxstyle':'square',
+                                                     'pad':0.0,
+                                                     'facecolor': 'none',
+                                                     'lw': 0.,
+                                                     'clip_on': True})
+
+    if zero_marker is not None:
+      rcs = np.argwhere(np.isclose(0., matdata))
+      ax.scatter(rcs[:, 1], rcs[:, 0], c='k', marker=zero_marker, s=15)
+
+    if split_plots:
+      plt.show(block=False)
+      plt.draw()
+      plt.pause(1e-1)
+      plt.tight_layout()
+      plt.draw()
+      plt.pause(1e-6)
+
+  if not split_plots:
+    plt.show(block=False)
+    plt.draw()
+    plt.pause(1e-1)
+    plt.tight_layout()
+    plt.draw()
+    plt.pause(1e-6)
+
+
+def print_overview(Hsys, file=None):
+  """
+  print an overview of the (sub)system/block
+  """
+  if file is None:
+    file = sys.stdout
+  elif isinstance(file, str):
+    file = open(file, "wt")
+
+  print("==========================================================================", file=file)
+  print("===============  (sub)system overview  ===================================", file=file)
+  print("==========================================================================", file=file)
+
+  print("Tag: {:s}".format(Hsys.tag), file=file)
+  print("Is plant: {}".format(Hsys.is_plant), file=file)
+  print("Is SISO: {}".format(Hsys.issiso()), file=file)
+  print("Is discrete time: {}".format(Hsys.isdtime()), file=file)
+  print("Is continuous time: {}".format(Hsys.isctime()), file=file)
+  print("\nNumber of states: {:2d}".format(Hsys.states), file=file)
+  print("--------------------", file=file)
+  for istate, state in enumerate(Hsys.statenames):
+    print("  [{:d}] {:s}".format(istate, state), file=file)
+
+  print("\nNumber of inputs: {:2d}".format(Hsys.inputs), file=file)
+  print("--------------------", file=file)
+  for iin, input_ in enumerate(Hsys.inputnames):
+    print("  [{:d}] {:s}".format(iin, input_), file=file)
+
+  print("\nNumber of outputs: {:2d}".format(Hsys.outputs), file=file)
+  print("---------------------", file=file)
+  for iout, output in enumerate(Hsys.outputnames):
+    print("  [{:d}] {:s}".format(iout, output), file=file)
 
 
 def _linear_interpolation(ys, xs, ythres):
@@ -207,7 +864,7 @@ def stepinfo(ys, ts=None, yfinal=None, rise_percs=[10., 90.], settle_perc=2., in
   return out
 
 
-def _prune(Hsys, strlist, inout):
+def _prune(Hsys, strlist, inout, keep_or_prune):
   """
   prune the inputs of a system
   """
@@ -217,45 +874,47 @@ def _prune(Hsys, strlist, inout):
   elif inout == 'out':
     allnames = Hsys.outputnames.copy()
 
-  indices2keep = []
-
-  nameslist = []
+  indices = []
   for i2k in strlist:
     ifnd = aux.find_elm_containing_substrs(i2k, allnames, nreq=1, strmatch="all")
-    indices2keep.append(ifnd)
-    nameslist.append(allnames[ifnd])
+    indices.append(ifnd)
+
+  if keep_or_prune == 'keep':
+    indices2keep = indices
+  else:
+    indices2keep = np.setdiff1d(np.r_[:len(allnames)], indices)
 
   # set all invalids to zero
   if inout == 'in':
     Hsys.B = Hsys.B[:, indices2keep]
     Hsys.D = Hsys.D[:, indices2keep]
+    Hsys.inputnames = aux.listify(aux.arrayify(Hsys.inputnames)[indices2keep])
     Hsys.inputs = len(indices2keep)
-    Hsys.inputnames = nameslist
   elif inout == 'out':
     Hsys.C = Hsys.C[indices2keep, :]
     Hsys.D = Hsys.D[indices2keep, :]
+    Hsys.outputnames = aux.listify(aux.arrayify(Hsys.outputnames)[indices2keep])
     Hsys.outputs = len(indices2keep)
-    Hsys.outputnames = nameslist
 
   return indices2keep
 
 
-def prune_ios(Hsys, inputnames=None, outputnames=None):
+def prune_ios(Hsys, inputnames=None, outputnames=None, keep_or_prune='keep'):
   """
   prune the inputs and outputs from a system
   """
   iins = np.r_[:Hsys.inputs]
   iouts = np.r_[:Hsys.outputs]
   if inputnames is not None:
-    iins = _prune(Hsys, inputnames, 'in')
+    iins = _prune(Hsys, inputnames, 'in', keep_or_prune)
 
   if outputnames is not None:
-    iouts = _prune(Hsys, outputnames, 'out')
+    iouts = _prune(Hsys, outputnames, 'out', keep_or_prune)
 
   return iins, iouts
 
 
-def build_system(blocks, Qstrings, tag="system", opens=None, shorts=None):
+def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, prune=False):
   """
   build_system(blocks, Qstrings[, opens, shorts])
 
@@ -273,7 +932,7 @@ def build_system(blocks, Qstrings, tag="system", opens=None, shorts=None):
            ensures the creation of those
   tag : str, default='system'
         The id tag the returned system will have
-  Qstrings : array-like of tuples of strings
+  Qstrings : None or array-like of tuples of strings, default=None
              Contains tuples of strings describing the `from` and `to` of any signal. This is
              different from the order in the control module Q array (which has inputs first,
              and then outputs). I've found it more easy to visualize it from output to input.
@@ -295,8 +954,21 @@ def build_system(blocks, Qstrings, tag="system", opens=None, shorts=None):
   --------
   out : state-space object
   """
+  blocks = aux.listify(blocks)
 
   # next step: define interconnections based on input and outputnames
+  if Qstrings is None:
+    # connect all outputs to all subsequent inputs, works only for siso systems
+    Qstrings = []
+    for iblock in range(len(blocks)-1):
+      block_out = blocks[iblock]
+      block_in = blocks[iblock + 1]
+      if not block_out.issiso():
+        raise ValueError("In case Qstrings=None, all blocks must be SISO." +
+                         "block with tag `{}` is not!".format(block_out.tag))
+
+      Qstrings.append((block_out.outputnames[0], block_in.inputnames[0]))
+
   Qstrings_arr = np.array(Qstrings, dtype=[('outputs', object), ('inputs', object)])
 
   opens = aux.tuplify(opens)
@@ -366,26 +1038,84 @@ def build_system(blocks, Qstrings, tag="system", opens=None, shorts=None):
       if hasattr(blocks[iplant], attr):
         setattr(Hsys, attr, getattr(blocks[iplant], attr))
 
+  if prune:
+    # prune all that are connected (be carefull with this automated setting!)
+    Qarr = aux.arrayify(Qstrings)
+    prune_ios(Hsys, inputnames=Qarr[:, 1], outputnames=Qarr[:, 0], keep_or_prune='prune')
+
   return Hsys
 
 
-def replace_io_strings(Hplant, replacements, show_warnings=False):
+def modify_plant(Hplant, what2mod, replace=None, rename=None, reorder=None, remove=None):
   """
-  modifiy entries in the list by the replacements
+  modify part of the plant
   """
-  outlists = (Hplant.inputnames.copy(), Hplant.outputnames.copy())
-  nameslists = outlists
-  for outlist, nameslist in zip(outlists, nameslists):
-    for repl in replacements:
-      try:
-        ifnd = aux.find_elm_containing_substrs(repl[0], nameslist, nreq=1, strmatch="all")
-        outlist[ifnd] = repl[1]
-      except Exception:
-        if show_warnings:
-          warn("nothing found for `{}` in {}".format(repl[0], nameslist))
+  if not hasattr(Hplant, what2mod):
+    raise ValueError("The plant does not have an attribute `{}`".format(what2mod))
 
-  Hplant.inputnames = outlists[0].copy()
-  Hplant.outputnames = outlists[1].copy()
+  dimdict = dict.fromkeys(['A', 'B', 'C', 'D'], [])
+  if what2mod == 'states':
+    nameattr = 'statenames'
+    dimdict['A'] = [0, 1]
+    dimdict['B'] = [0]
+    dimdict['C'] = [1]
+  elif what2mod == 'inputs':
+    nameattr = 'inputnames'
+    dimdict['B'] = [1]
+    dimdict['D'] = [1]
+  elif what2mod == 'outputs':
+    nameattr = 'outputnames'
+    dimdict['C'] = [0]
+    dimdict['D'] = [0]
+
+  # 1: removing states
+  irem = aux.find_elm_containing_substrs(remove, getattr(Hplant, nameattr))
+  ikeep = np.setdiff1d(np.r_[:getattr(Hplant, what2mod)], irem)
+
+  # update states/inputs/outputs
+  setattr(Hplant, what2mod, ikeep.size)
+  # update names
+  setattr(Hplant, nameattr, getattr(Hplant, nameattr)[ikeep])
+
+  # update matrices
+  for matid in dimdict.keys():
+    mdata = getattr(Hplant, matid)
+    if 0 in dimdict[matid]:
+      mdata = mdata[ikeep, :]
+    if 1 in dimdict[matid]:
+      mdata = mdata[:, ikeep]
+
+    # set modified matrix to Hplant
+    setattr(Hplant, matid, mdata)
+
+  # 2: replace and rename
+  setattr(Hplant, nameattr,
+          aux.arrayify(aux.modify_strings(getattr(Hplant, nameattr), globs=replace, specs=rename)))
+
+  # 3: reorder
+  if reorder is not None:
+    nof_elms = getattr(Hplant, what2mod)
+    if len(reorder) != nof_elms:
+      raise ValueError("The number of elements in `reorder` ({:d}) is not matching the number of".
+                       format(len(reorder)) + " outputs ({:d}".format(nof_elms))
+
+    isort = np.ones((nof_elms), dtype=int)
+    for ielm, str_ in enumerate(reorder):
+      isort[ielm] = aux.find_elm_containing_substrs(str_, getattr(Hplant, nameattr), nreq=1,
+                                                    raise_except=False, strmatch='all')
+
+    # update matrices
+    for matid in dimdict.keys():
+      mdata = getattr(Hplant, matid)
+      if 0 in dimdict[matid]:
+        mdata = mdata[isort, :]
+      if 1 in dimdict[matid]:
+        mdata = mdata[:, isort]
+
+      # set modified matrix to Hplant
+      setattr(Hplant, matid, mdata)
+
+    setattr(Hplant, nameattr, getattr(Hplant, nameattr)[isort])
 
 
 def make_block(btype, tag, dt=0., inames=None, onames=None, force_statespace=True,
@@ -503,7 +1233,10 @@ def load_models(files, dirname='', states_to_ignore=[], vwinds_wanted=None, azis
       for azi_wanted in azis_wanted:
         iazi = aux.get_closest_index(azi_wanted, azis)
 
-        Hplants_list.append(Hplants[iwind, iazi])
+        Hplant = Hplants[iwind, iazi]
+        Hplant.is_plant = True
+        Hplant.tag = 'plant_w{:0.1f}_a{:0.1f}'.format(vwind_wanted, azi_wanted)
+        Hplants_list.append(Hplant)
 
   if len(Hplants_list) == 1:
     Hplants_list = Hplants_list[0]
@@ -613,7 +1346,7 @@ def plot_bode(Hplant, input_=0, output=0, omega_limits=[1e-3, 1e2], omega_num=1e
     Hsiso_this = make_siso(Hplant, iin, iout)
 
   mags, phs, omegas = cm.bode_plot(Hsiso_this, dB=dB, Hz=Hz, Plot=False,
-                                   omega_limits=omega_limits, omega_num=omega_num)
+                                   omega_limits=omega_limits, omega_num=np.int(omega_num))
 
   # convert phs to interval -inf, 0 to be able to verify the phase margins correctly
   if label is None:
@@ -711,7 +1444,7 @@ def plot_single_plant_bodes(Hplant, inputs=None, outputs=None, omega_limits=[1e-
     for iout in outputs:
       iplot += 1
       (fig, axs) = plot_bode(Hplant, iin, iout, omega_limits=omega_limits,
-                             omega_num=omega_num, dB=dB, Hz=Hz, show_margins=show_margins,
+                             omega_num=np.int_(omega_num), dB=dB, Hz=Hz, show_margins=show_margins,
                              show_nyquist=show_nyquist, fig=fig, axs=axs,
                              color=colors[iplot], linestyle='-', show_legend=show_legend,
                              figname=figname, suptitle=suptitle)
@@ -962,7 +1695,7 @@ def make_siso(Hplant, input_, output, tag="siso"):
   return siso
 
 
-def loadpj(items=None, dirname=None, filenames=None):
+def _loadpj(items=None, dirname=None, filenames=None):
   '''
   shadow of loadpj.m
   '''
