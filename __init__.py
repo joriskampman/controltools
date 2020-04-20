@@ -1176,7 +1176,57 @@ def modify_plant(Hplant, what2mod, replace=None, rename=None, reorder=None, remo
 def make_block(btype, tag, dt=0., inames=None, onames=None, force_statespace=True,
                keep_names=False, **blargs):
   """
-  to be filled in
+  *make_block* creates a block, which is a wrapper around the StateSpace object that has some
+  some added properties that allow the function *build_system* to easily connect blocks in any
+  sequence and with any connection wanted.
+
+  The idea is that there are a set of predefined block types which can be instantly build in
+  StateSpace form via some keyword arguments that depend on the block type. The block types and
+  keyword arguments are given below:
+  - plant : a plant, can be any of the following sub block types: 'ss', 'ssdata', 'tf'
+  - k/g/gain : simple gain block. keywords: 'k' (float)
+  - short : shortcut block, equivalent to a gain of 1. no keyword arguments defined
+  - open : open connection, equivalent to a gain of 0. no keyword arguments defined
+  - inv : inverter, equivalent to a gain of -1. no keyword arguments defined
+  - ss : StateSpace object, keyword arguments: 'ss' (control.StateSpace)
+  - ssdata : matrices that define the state space (A, B, C and D). keyword arguments: 'A', 'B', 'C'
+             and 'D' (2D numpy.ndarray)
+  - tf : transfer function. keyword arguments: 'tf' (control.TransferFunction)
+  - tfdata : numerator and denominator vectors. keyword arguments: 'num' and 'den' (1D np.ndarray)
+  - (p)(i)(d) : any component combination of a PID. keyword arguments can be found via the
+                subroutine function *controltools.pid*
+  - notch/nf : notch filter. keyword arguments via *controltools.notch*
+  - bandpass/bp : band-pass filter. keyword arguments via *controltools.bandpass*
+  - lowpass/lp : low-pass filter. keyword arguments via *controltools.low_pass_filter*
+  - highpass/hp : high-pass filter. keyword arguments via *controltools.high_pass_filter*
+
+  Arguments:
+  ----------
+  btype : [ one of the above block types ]
+          The block type, see description above
+  tag : str
+        The tag of the to be created block
+  dt : float, default=0.
+       The discrete time step size. If 0, the system is continuous
+  inames : [None | array-like of str], default=None
+           A list of input names. If None, the inputs are named according to: <tag>_in<#input>
+  onames : [None | array-like of str], default=None
+           A list of output names. If None, the outputs are named according to: <tag>_in<#output>
+  force_statespace : bool, default=True
+                     Whether the output must be forced to be of the class control.StateSpace
+  keep_names : bool, default=False
+               Keep the input-/outputnames in case btype='plant'
+
+  Other arguments:
+  ----------------
+  **blargs : block keyword arguments. See the description of the available block types above
+
+  Returns:
+  --------
+  block : (modified) control.StateSpace object
+          The StateSpace object is modified with some additional properties that allow the function
+          *build_system* to more easily string block together in a full-fledged interconnected
+          system
   """
   # take blargs as keyword arguments for the subfunctions
   remove_useless = False
@@ -1196,8 +1246,8 @@ def make_block(btype, tag, dt=0., inames=None, onames=None, force_statespace=Tru
     if onames is None:
       if hasattr(block, 'outputnames'):
         onames = block.outputnames.copy()
-  elif btype == 'g':
-    block = cm.StateSpace([], [], [], blargs['gain'], remove_useless=remove_useless)
+  elif btype in ('gain', 'g', 'k'):
+    block = cm.StateSpace([], [], [], blargs['k'], remove_useless=remove_useless)
   elif btype == 'short':
     block = cm.StateSpace([], [], [], 1., remove_useless=remove_useless)
   elif btype == 'open':
@@ -1218,13 +1268,13 @@ def make_block(btype, tag, dt=0., inames=None, onames=None, force_statespace=Tru
       block = cm.tf2ss(block)
   elif btype in ['p', 'i', 'd', 'pi', 'pd', 'pid']:
     block = pid(**blargs)
-  elif btype == 'nf':
+  elif btype in ('notch', 'nf'):
     block = notch(**blargs)
-  elif btype == 'bp':
+  elif btype in ('bandpass', 'bp'):
     block = bandpass(**blargs)
-  elif btype == 'lp':
+  elif btype in ('lowpass', 'lp'):
     block = low_pass_filter(**blargs)
-  elif btype == 'hp':
+  elif btype in ('highpass', 'hp'):
     block = high_pass_filter(**blargs)
   else:
     raise NotImplementedError("The wanted btype ({}) is not implemented".format(btype))
@@ -1258,6 +1308,10 @@ def make_block(btype, tag, dt=0., inames=None, onames=None, force_statespace=Tru
       if onames is not None:
         given_name = onames[iout].replace(' ', '_')
         block.outputnames[-1] += "_{:s}".format(given_name)
+
+  # make in/out names into array for easy indexing
+  block.inputnames = aux.arrayify(block.inputnames)
+  block.outputnames = aux.arrayify(block.outputnames)
 
   return block
 
