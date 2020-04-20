@@ -916,8 +916,6 @@ def prune_ios(Hsys, inputnames=None, outputnames=None, keep_or_prune='keep'):
 
 def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, prune=False):
   """
-  build_system(blocks, Qstrings[, opens, shorts])
-
   build the system from blocks (make_block) and define the connections in a [(from, to)]
   array-like of tuples.
 
@@ -949,6 +947,9 @@ def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, p
           broken connection
   shorts : [None | str | array-like of strings], default=None
            Defines the blocks which are a shortcut; output = input
+  prune : bool, default=False
+          prune the internal connections made. These will not show up on the input(name)s and
+          output(name)s lists
 
   Returns:
   --------
@@ -983,13 +984,13 @@ def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, p
       blocks[iblock] = make_block('short', btag)
 
   # 1: check all blocks mentioned in Q
-  sys_inputnames = []
-  sys_outputnames = []
+  sys_inputnames_list = []
+  sys_outputnames_list = []
   iplant = -1
   for iblock, block in enumerate(blocks):
     btag = block.tag
-    sys_inputnames += block.inputnames.copy()
-    sys_outputnames += block.outputnames.copy()
+    sys_inputnames_list += aux.listify(block.inputnames.copy())
+    sys_outputnames_list += aux.listify(block.outputnames.copy())
     if block.is_plant:
       iplant = iblock
 
@@ -997,7 +998,7 @@ def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, p
   for qa in Qstrings_arr:
     out = qa['outputs']
     # find exact output index (remember: start at 1!!!!)
-    iout = aux.find_elm_containing_substrs(out, sys_outputnames, nreq=1, strmatch='all')
+    iout = aux.find_elm_containing_substrs(out, sys_outputnames_list, nreq=1, strmatch='all')
 
     ins = aux.tuplify(qa['inputs'])
     for in_ in ins:
@@ -1008,32 +1009,32 @@ def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, p
         in_ = in_[1:]
 
       # find the index
-      iin_ = aux.find_elm_containing_substrs(in_, sys_inputnames, nreq=1, strmatch='all')
+      iin_ = aux.find_elm_containing_substrs(in_, sys_inputnames_list, nreq=1, strmatch='all')
 
       # add to Q array
       Ql.append((iin_+1, (1 - 2*is_fb)*(iout+1)))
 
   Q = aux.arrayify(Ql)
 
-  inputv = np.r_[:len(sys_inputnames)] + 1
-  outputv = np.r_[:len(sys_outputnames)] + 1
+  inputv = np.r_[:len(sys_inputnames_list)] + 1
+  outputv = np.r_[:len(sys_outputnames_list)] + 1
 
   Hsys_parts = cm.append(*blocks)
   Hsys = cm.connect(Hsys_parts, Q, inputv, outputv)
 
-  if iplant > -1:
-    Hsys.is_plant = True
   Hsys.tag = tag
-  Hsys.inputnames = sys_inputnames
-  Hsys.outputnames = sys_outputnames
+  Hsys.inputnames = aux.arrayify(sys_inputnames_list)
+  Hsys.outputnames = aux.arrayify(sys_outputnames_list)
 
   if iplant > -1:
-    possible_attrs = ('wind_speed',
+    possible_attrs = ('is_plant',
+                      'wind_speed',
                       'azimuth',
                       'ref_generator_speed',
                       'ref_generator_torque',
                       'ref_rotor_speed',
-                      'ref_pitch')
+                      'ref_pitch',
+                      'statenames')
     for attr in possible_attrs:
       if hasattr(blocks[iplant], attr):
         setattr(Hsys, attr, getattr(blocks[iplant], attr))
@@ -1044,6 +1045,60 @@ def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, p
     prune_ios(Hsys, inputnames=Qarr[:, 1], outputnames=Qarr[:, 0], keep_or_prune='prune')
 
   return Hsys
+
+
+def normalize_plant_inputs(Hplant, tag_sufx="_norm", prune=True, keep_inputs=True,
+                           input_prefx="[norm]"):
+  """
+  normalizes the inputs to a plant.
+
+  This encompasses the normalizing the vector 2-norms of the columns of the input matrix (B). This
+  prevents numerical errors in case the impact of different inputs differs by several orders of
+  magnitude.
+
+  For instance the torque and pitch actuator impact is around 1e5 bigger for the torque.
+
+  To eliminate these discrepancies, these scale factors per input are used as pure gains on the
+  inputs, thus rendering the B matrix more numerically stable as well as all matrix calculations
+  based upon it.
+
+  Arguments:
+  ----------
+  Hplant : block object
+           The plant for which the inputs must be normalized
+  tag_sufx : str, default="_norm"
+             The suffix to the tag of the plant for the new normalized-input plant
+  prune : bool, default=True
+          Whether the prune the internal connections between the normalization block and the plant
+  keep_inputs : bool, default=True
+                if True, the input names of the plant will be kept and mapped on the normalization
+                blocks inputs with a prefix. In case prune=False, be carefull to not cause
+                confusion
+  input_prefx : str, default="[norm]"
+                The prefix to the input names for the new normalized-input plant. prefix is only
+                used in case *keep_inputs=True*
+
+  Returns:
+  --------
+  Hplant : block object
+           The new plant object with scaled/normalized inputs
+  """
+  input_sfs = 1./np.linalg.norm(Hplant.B, axis=0, ord=2)
+
+  # make input normalization block
+  norm_blocks = [Hplant]
+  Qstrings = []
+  for iinput in range(Hplant.inputs):
+    norm_block = make_block('k', "nblock_{:d}".format(iinput), k=input_sfs[iinput])
+    norm_blocks.append(norm_block)
+    Qstring = (norm_block.outputnames[0], Hplant.inputnames[iinput])
+    Qstrings.append(Qstring)
+
+  Hplant_n = build_system(norm_blocks, Qstrings=Qstrings, tag=Hplant.tag + tag_sufx, prune=prune)
+  if keep_inputs:
+    Hplant_n.inputnames = aux.arrayify([input_prefx + name for name in Hplant.inputnames])
+
+  return Hplant_n
 
 
 def modify_plant(Hplant, what2mod, replace=None, rename=None, reorder=None, remove=None):
