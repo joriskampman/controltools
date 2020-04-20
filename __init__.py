@@ -518,16 +518,20 @@ def plot_state_space_matrices(ss, display_type='compressed', show_values=True, z
   bin_cmap = 'traffic_light'
 
   matdict = dict()
-  matdict['A'] = dict(plot_yticks=True,
+  matdict['A'] = dict(show_x_labels=split_plots,
+                      show_y_labels=True,
                       rowlabels=_labelmaker("d({:s})/dt - {:2d}", ss.statenames),
                       collabels=_labelmaker("{:s} - {:2d}", ss.statenames))
-  matdict['B'] = dict(plot_yticks=split_plots,
+  matdict['B'] = dict(show_x_labels=split_plots,
+                      show_y_labels=split_plots,
                       rowlabels=_labelmaker("d({:s})/dt - {:2d}", ss.statenames),
                       collabels=_labelmaker("{:s} - {:2d}", ss.inputnames))
-  matdict['C'] = dict(plot_yticks=True,
+  matdict['C'] = dict(show_x_labels=True,
+                      show_y_labels=True,
                       rowlabels=_labelmaker("{:s} - {:2d}", ss.outputnames),
                       collabels=_labelmaker("{:s} - {:2d}", ss.statenames))
-  matdict['D'] = dict(plot_yticks=split_plots,
+  matdict['D'] = dict(show_x_labels=True,
+                      show_y_labels=split_plots,
                       rowlabels=_labelmaker("{:s} - {:2d}", ss.outputnames),
                       collabels=_labelmaker("{:s} - {:2d}", ss.inputnames))
 
@@ -587,10 +591,12 @@ def plot_state_space_matrices(ss, display_type='compressed', show_values=True, z
     # set title, grid and labels
     ax.set_title("{:s} [{:d} x {:d}]".format(key, nr, nc))
     ax.set_xticks(np.r_[:nc])
-    ax.set_xticklabels(mdict['collabels'], fontsize=7, rotation=45, va='top', ha='right')
-    ax.set_yticks([])
-    if mdict['plot_yticks']:
-      ax.set_yticks(np.r_[:nr])
+    ax.set_xticklabels(ax.get_xticks(), fontsize=7)
+    if mdict['show_x_labels']:
+      ax.set_xticklabels(mdict['collabels'], fontsize=7, rotation=45, va='top', ha='right')
+    ax.set_yticks(np.r_[:nr])
+    ax.set_yticklabels(ax.get_yticks(), fontsize=7)
+    if mdict['show_y_labels']:
       ax.set_yticklabels(mdict['rowlabels'], fontsize=7)
     ax.tick_params(axis='both', which='major', length=0)
 
