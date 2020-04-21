@@ -28,8 +28,8 @@ class RootLocus(object):
   max_markersize = 40
 
   ctrl_jump_perc = 2.5
-  nof_K = 2001
-  K_start_pow10 = -2
+  nof_K = 5001
+  K_start_pow10 = -5
   K_end_pow10 = 8
   sfmax_K = 2.
   plot_pz = True
@@ -301,7 +301,6 @@ class RootLocus(object):
     C_den = cm.ss2tf(self.C).den[0][0]
 
     K_base = C_num[-1 - order_of_coef_to_check]
-
     C_aug = make_block('tfdata', 'Ctq_aug', dt=self.dt, num=C_num/K_base, den=C_den,
                        keep_names=True)
 
@@ -324,6 +323,7 @@ class RootLocus(object):
 
     CG_aug = build_system([self.C_aug, self.G], tag="CG_aug", prune=True).minreal()
 
+    pdb.set_trace
     # get poles and zeros (from minreal system)
     poles = CG_aug.pole()
     zeros = CG_aug.zero()
@@ -352,6 +352,23 @@ class RootLocus(object):
       # 1. make delta matrix and find the minimum per column
       deltas = np.abs(prev_roots.reshape(-1, 1) - roots.reshape(1, -1))
       indices = np.argmin(deltas, axis=1)
+      # # indices = np.argmin(deltas, axis=1)
+      # # values_to_indices = deltas[irows, indices]
+
+      # # in case double indices occur -> make random choice via noise matrix
+      # # while loop necessary in case noise matrix is not decisive
+      # ifull = np.r_[:nof_roots]
+      # icols = []
+      # mins_per_row = np.amin(deltas, axis=1)
+      # isort = np.argsort(mins_per_row)
+      # for idx in range(nof_roots):
+      #   row = deltas[isort[idx], :]
+      #   ivalid = np.setdiff1d(ifull, icols)
+      #   rowvalid = row[ivalid]
+      #   ifnd = np.argmin(rowvalid)
+      #   icols.append(ivalid[ifnd])
+      # indices = np.array(icols)
+      # print(indices)
 
       # in case double indices occur -> make random choice via noise matrix
       # while loop necessary in case noise matrix is not decisive
@@ -406,11 +423,11 @@ class RootLocus(object):
     xlims = aux.arrayify(aux.bracket(dcays_arr[:, self.inotinfs]))
     ylims = aux.arrayify(aux.bracket(worfs_arr[:, self.inotinfs]))
 
-    dists = np.abs(np.diff(self.rootsarr, axis=0))
-    cdists = np.cumsum(dists, axis=0)
-    cdistsn = cdists/cdists[-1, :]
-    cdistsn_ = np.vstack((np.zeros((1, nof_poles), dtype=np.float_), cdistsn))
-    sizearr = aux.data_scaling(cdistsn_, self.min_markersize, self.max_markersize, func='linear')
+    # dists = np.abs(np.diff(self.rootsarr, axis=0))
+    # cdists = np.cumsum(dists, axis=0)
+    # cdistsn = cdists/cdists[-1, :]
+    # cdistsn_ = np.vstack((np.zeros((1, nof_poles), dtype=np.float_), cdistsn))
+    # sizearr = aux.data_scaling(cdistsn_, self.min_markersize, self.max_markersize, func='linear')
 
     self.fig = plt.figure(aux.figname("root-locus"))
     self.ax = self.fig.add_subplot(111)
@@ -427,29 +444,30 @@ class RootLocus(object):
       is_valid_y = (worfs >= ylims[0])*(worfs <= ylims[1])
       is_valid = is_valid_x*is_valid_y
 
-      colvec = aux.color_vector(self.nof_K, colors[iroot, :], os=0.35)
-      cmap = ListedColormap(colvec, name="root_locus_p{:d}".format(iroot))
-      self.ax.plot(dcays[is_valid], worfs[is_valid], '-', color=colors[iroot, :], linewidth=0.5,
-                   picker=False, zorder=1)
-      self.ax.scatter(dcays[is_valid], worfs[is_valid], s=sizearr[is_valid, iroot],
-                      c=sizearr[is_valid, iroot], cmap=cmap, marker='o', picker=True,
-                      label="pole {:d}".format(iroot), zorder=3)
+      # colvec = aux.color_vector(self.nof_K, colors[iroot, :], os=0.35)
+      # cmap = ListedColormap(colvec, name="root_locus_p{:d}".format(iroot))
+      self.ax.plot(dcays[is_valid], worfs[is_valid], '-', color=colors[iroot, :], linewidth=2,
+                   picker=True, label="pole {:d}".format(iroot), zorder=1)
+      # self.ax.scatter(dcays[is_valid], worfs[is_valid], s=sizearr[is_valid, iroot],
+      #                 c=sizearr[is_valid, iroot], cmap=cmap, marker='o', picker=True,
+      #                 label="pole {:d}".format(iroot), zorder=3)
 
       if plot_ref:
         self.ax.plot(dcays_arr[iref, iroot], worfs_arr[iref, iroot], '*', mew=2, mfc='none',
-                     markersize=20, mec=colors[iroot, :], zorder=2)
+                     markersize=10, mec=colors[iroot, :], zorder=2)
       # plot poles and zeros if flag is on
       if plot_pz:
         self.ax.plot(*split_s_plane_coords(self.poles[iipoles[iroot]], Hz=self.Hz), 'x', mew=2,
-                     mfc='none', markersize=15, mec=colors[iroot, :], zorder=2)
+                     markersize=10, mec=colors[iroot, :], zorder=2)
       # plot clicked on artists (clarts)
-      clarts[iroot], = self.ax.plot(0., 0., 's', mec='k', mfc='none', markersize=15, mew=3,
+      clarts[iroot], = self.ax.plot(0., 0., 's', mec='k', mfc='none', markersize=7, mew=2,
                                     visible=False, zorder=10)
 
     if plot_pz:
       for izero in range(nof_zeros):
+        # pass
         self.ax.plot(*split_s_plane_coords(self.zeros[izero], Hz=self.Hz), 'o', mew=2,
-                     mfc='none', markersize=15, mec=colors[iizeros[izero], :], zorder=3)
+                     markersize=7, mfc='none', mec=colors[iizeros[izero], :], zorder=3)
 
     # add the zeta lines
     self.plot_zeta_lines(False)
@@ -916,8 +934,6 @@ def prune_ios(Hsys, inputnames=None, outputnames=None, keep_or_prune='keep'):
 
 def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, prune=False):
   """
-  build_system(blocks, Qstrings[, opens, shorts])
-
   build the system from blocks (make_block) and define the connections in a [(from, to)]
   array-like of tuples.
 
@@ -949,6 +965,9 @@ def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, p
           broken connection
   shorts : [None | str | array-like of strings], default=None
            Defines the blocks which are a shortcut; output = input
+  prune : bool, default=False
+          prune the internal connections made. These will not show up on the input(name)s and
+          output(name)s lists
 
   Returns:
   --------
@@ -983,13 +1002,13 @@ def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, p
       blocks[iblock] = make_block('short', btag)
 
   # 1: check all blocks mentioned in Q
-  sys_inputnames = []
-  sys_outputnames = []
+  sys_inputnames_list = []
+  sys_outputnames_list = []
   iplant = -1
   for iblock, block in enumerate(blocks):
     btag = block.tag
-    sys_inputnames += block.inputnames.copy()
-    sys_outputnames += block.outputnames.copy()
+    sys_inputnames_list += aux.listify(block.inputnames.copy())
+    sys_outputnames_list += aux.listify(block.outputnames.copy())
     if block.is_plant:
       iplant = iblock
 
@@ -997,7 +1016,7 @@ def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, p
   for qa in Qstrings_arr:
     out = qa['outputs']
     # find exact output index (remember: start at 1!!!!)
-    iout = aux.find_elm_containing_substrs(out, sys_outputnames, nreq=1, strmatch='all')
+    iout = aux.find_elm_containing_substrs(out, sys_outputnames_list, nreq=1, strmatch='all')
 
     ins = aux.tuplify(qa['inputs'])
     for in_ in ins:
@@ -1008,32 +1027,32 @@ def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, p
         in_ = in_[1:]
 
       # find the index
-      iin_ = aux.find_elm_containing_substrs(in_, sys_inputnames, nreq=1, strmatch='all')
+      iin_ = aux.find_elm_containing_substrs(in_, sys_inputnames_list, nreq=1, strmatch='all')
 
       # add to Q array
       Ql.append((iin_+1, (1 - 2*is_fb)*(iout+1)))
 
   Q = aux.arrayify(Ql)
 
-  inputv = np.r_[:len(sys_inputnames)] + 1
-  outputv = np.r_[:len(sys_outputnames)] + 1
+  inputv = np.r_[:len(sys_inputnames_list)] + 1
+  outputv = np.r_[:len(sys_outputnames_list)] + 1
 
   Hsys_parts = cm.append(*blocks)
   Hsys = cm.connect(Hsys_parts, Q, inputv, outputv)
 
-  if iplant > -1:
-    Hsys.is_plant = True
   Hsys.tag = tag
-  Hsys.inputnames = sys_inputnames
-  Hsys.outputnames = sys_outputnames
+  Hsys.inputnames = aux.arrayify(sys_inputnames_list)
+  Hsys.outputnames = aux.arrayify(sys_outputnames_list)
 
   if iplant > -1:
-    possible_attrs = ('wind_speed',
+    possible_attrs = ('is_plant',
+                      'wind_speed',
                       'azimuth',
                       'ref_generator_speed',
                       'ref_generator_torque',
                       'ref_rotor_speed',
-                      'ref_pitch')
+                      'ref_pitch',
+                      'statenames')
     for attr in possible_attrs:
       if hasattr(blocks[iplant], attr):
         setattr(Hsys, attr, getattr(blocks[iplant], attr))
@@ -1044,6 +1063,62 @@ def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, p
     prune_ios(Hsys, inputnames=Qarr[:, 1], outputnames=Qarr[:, 0], keep_or_prune='prune')
 
   return Hsys
+
+
+def normalize_plant_inputs(Hplant, tag_sufx="_norm", prune=True, keep_inputs=True,
+                           input_prefx="[norm]"):
+  """
+  normalizes the inputs to a plant.
+
+  This encompasses the normalizing the vector 2-norms of the columns of the input matrix (B). This
+  prevents numerical errors in case the impact of different inputs differs by several orders of
+  magnitude.
+
+  For instance the torque and pitch actuator impact is around 1e5 bigger for the torque.
+
+  To eliminate these discrepancies, these scale factors per input are used as pure gains on the
+  inputs, thus rendering the B matrix more numerically stable as well as all matrix calculations
+  based upon it.
+
+  Arguments:
+  ----------
+  Hplant : block object
+           The plant for which the inputs must be normalized
+  tag_sufx : str, default="_norm"
+             The suffix to the tag of the plant for the new normalized-input plant
+  prune : bool, default=True
+          Whether the prune the internal connections between the normalization block and the plant
+  keep_inputs : bool, default=True
+                if True, the input names of the plant will be kept and mapped on the normalization
+                blocks inputs with a prefix. In case prune=False, be carefull to not cause
+                confusion
+  input_prefx : str, default="[norm]"
+                The prefix to the input names for the new normalized-input plant. prefix is only
+                used in case *keep_inputs=True*
+
+  Returns:
+  --------
+  Hplant : block object
+           The new plant object with scaled/normalized inputs
+  input_sfs : np.ndarray of floats
+              The applied scale factors for all inputs
+  """
+  input_sfs = 1./np.linalg.norm(Hplant.B, axis=0, ord=2)
+
+  # make input normalization block
+  norm_blocks = [Hplant]
+  Qstrings = []
+  for iinput in range(Hplant.inputs):
+    norm_block = make_block('k', "nblock_{:d}".format(iinput), k=input_sfs[iinput])
+    norm_blocks.append(norm_block)
+    Qstring = (norm_block.outputnames[0], Hplant.inputnames[iinput])
+    Qstrings.append(Qstring)
+
+  Hplant_n = build_system(norm_blocks, Qstrings=Qstrings, tag=Hplant.tag + tag_sufx, prune=prune)
+  if keep_inputs:
+    Hplant_n.inputnames = aux.arrayify([input_prefx + name for name in Hplant.inputnames])
+
+  return Hplant_n, input_sfs
 
 
 def modify_plant(Hplant, what2mod, replace=None, rename=None, reorder=None, remove=None):
@@ -1121,7 +1196,57 @@ def modify_plant(Hplant, what2mod, replace=None, rename=None, reorder=None, remo
 def make_block(btype, tag, dt=0., inames=None, onames=None, force_statespace=True,
                keep_names=False, **blargs):
   """
-  to be filled in
+  *make_block* creates a block, which is a wrapper around the StateSpace object that has some
+  some added properties that allow the function *build_system* to easily connect blocks in any
+  sequence and with any connection wanted.
+
+  The idea is that there are a set of predefined block types which can be instantly build in
+  StateSpace form via some keyword arguments that depend on the block type. The block types and
+  keyword arguments are given below:
+  - plant : a plant, can be any of the following sub block types: 'ss', 'ssdata', 'tf'
+  - k/g/gain : simple gain block. keywords: 'k' (float)
+  - short : shortcut block, equivalent to a gain of 1. no keyword arguments defined
+  - open : open connection, equivalent to a gain of 0. no keyword arguments defined
+  - inv : inverter, equivalent to a gain of -1. no keyword arguments defined
+  - ss : StateSpace object, keyword arguments: 'ss' (control.StateSpace)
+  - ssdata : matrices that define the state space (A, B, C and D). keyword arguments: 'A', 'B', 'C'
+             and 'D' (2D numpy.ndarray)
+  - tf : transfer function. keyword arguments: 'tf' (control.TransferFunction)
+  - tfdata : numerator and denominator vectors. keyword arguments: 'num' and 'den' (1D np.ndarray)
+  - (p)(i)(d) : any component combination of a PID. keyword arguments can be found via the
+                subroutine function *controltools.pid*
+  - notch/nf : notch filter. keyword arguments via *controltools.notch*
+  - bandpass/bp : band-pass filter. keyword arguments via *controltools.bandpass*
+  - lowpass/lp : low-pass filter. keyword arguments via *controltools.low_pass_filter*
+  - highpass/hp : high-pass filter. keyword arguments via *controltools.high_pass_filter*
+
+  Arguments:
+  ----------
+  btype : [ one of the above block types ]
+          The block type, see description above
+  tag : str
+        The tag of the to be created block
+  dt : float, default=0.
+       The discrete time step size. If 0, the system is continuous
+  inames : [None | array-like of str], default=None
+           A list of input names. If None, the inputs are named according to: <tag>_in<#input>
+  onames : [None | array-like of str], default=None
+           A list of output names. If None, the outputs are named according to: <tag>_in<#output>
+  force_statespace : bool, default=True
+                     Whether the output must be forced to be of the class control.StateSpace
+  keep_names : bool, default=False
+               Keep the input-/outputnames in case btype='plant'
+
+  Other arguments:
+  ----------------
+  **blargs : block keyword arguments. See the description of the available block types above
+
+  Returns:
+  --------
+  block : (modified) control.StateSpace object
+          The StateSpace object is modified with some additional properties that allow the function
+          *build_system* to more easily string block together in a full-fledged interconnected
+          system
   """
   # take blargs as keyword arguments for the subfunctions
   remove_useless = False
@@ -1141,8 +1266,8 @@ def make_block(btype, tag, dt=0., inames=None, onames=None, force_statespace=Tru
     if onames is None:
       if hasattr(block, 'outputnames'):
         onames = block.outputnames.copy()
-  elif btype == 'g':
-    block = cm.StateSpace([], [], [], blargs['gain'], remove_useless=remove_useless)
+  elif btype in ('gain', 'g', 'k'):
+    block = cm.StateSpace([], [], [], blargs['k'], remove_useless=remove_useless)
   elif btype == 'short':
     block = cm.StateSpace([], [], [], 1., remove_useless=remove_useless)
   elif btype == 'open':
@@ -1163,13 +1288,13 @@ def make_block(btype, tag, dt=0., inames=None, onames=None, force_statespace=Tru
       block = cm.tf2ss(block)
   elif btype in ['p', 'i', 'd', 'pi', 'pd', 'pid']:
     block = pid(**blargs)
-  elif btype == 'nf':
+  elif btype in ('notch', 'nf'):
     block = notch(**blargs)
-  elif btype == 'bp':
+  elif btype in ('bandpass', 'bp'):
     block = bandpass(**blargs)
-  elif btype == 'lp':
+  elif btype in ('lowpass', 'lp'):
     block = low_pass_filter(**blargs)
-  elif btype == 'hp':
+  elif btype in ('highpass', 'hp'):
     block = high_pass_filter(**blargs)
   else:
     raise NotImplementedError("The wanted btype ({}) is not implemented".format(btype))
@@ -1203,6 +1328,10 @@ def make_block(btype, tag, dt=0., inames=None, onames=None, force_statespace=Tru
       if onames is not None:
         given_name = onames[iout].replace(' ', '_')
         block.outputnames[-1] += "_{:s}".format(given_name)
+
+  # make in/out names into array for easy indexing
+  block.inputnames = aux.arrayify(block.inputnames)
+  block.outputnames = aux.arrayify(block.outputnames)
 
   return block
 
