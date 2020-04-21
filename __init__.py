@@ -28,8 +28,8 @@ class RootLocus(object):
   max_markersize = 40
 
   ctrl_jump_perc = 2.5
-  nof_K = 2001
-  K_start_pow10 = -2
+  nof_K = 5001
+  K_start_pow10 = -5
   K_end_pow10 = 8
   sfmax_K = 2.
   plot_pz = True
@@ -301,7 +301,6 @@ class RootLocus(object):
     C_den = cm.ss2tf(self.C).den[0][0]
 
     K_base = C_num[-1 - order_of_coef_to_check]
-
     C_aug = make_block('tfdata', 'Ctq_aug', dt=self.dt, num=C_num/K_base, den=C_den,
                        keep_names=True)
 
@@ -324,6 +323,7 @@ class RootLocus(object):
 
     CG_aug = build_system([self.C_aug, self.G], tag="CG_aug", prune=True).minreal()
 
+    pdb.set_trace
     # get poles and zeros (from minreal system)
     poles = CG_aug.pole()
     zeros = CG_aug.zero()
@@ -352,6 +352,23 @@ class RootLocus(object):
       # 1. make delta matrix and find the minimum per column
       deltas = np.abs(prev_roots.reshape(-1, 1) - roots.reshape(1, -1))
       indices = np.argmin(deltas, axis=1)
+      # # indices = np.argmin(deltas, axis=1)
+      # # values_to_indices = deltas[irows, indices]
+
+      # # in case double indices occur -> make random choice via noise matrix
+      # # while loop necessary in case noise matrix is not decisive
+      # ifull = np.r_[:nof_roots]
+      # icols = []
+      # mins_per_row = np.amin(deltas, axis=1)
+      # isort = np.argsort(mins_per_row)
+      # for idx in range(nof_roots):
+      #   row = deltas[isort[idx], :]
+      #   ivalid = np.setdiff1d(ifull, icols)
+      #   rowvalid = row[ivalid]
+      #   ifnd = np.argmin(rowvalid)
+      #   icols.append(ivalid[ifnd])
+      # indices = np.array(icols)
+      # print(indices)
 
       # in case double indices occur -> make random choice via noise matrix
       # while loop necessary in case noise matrix is not decisive
@@ -406,11 +423,11 @@ class RootLocus(object):
     xlims = aux.arrayify(aux.bracket(dcays_arr[:, self.inotinfs]))
     ylims = aux.arrayify(aux.bracket(worfs_arr[:, self.inotinfs]))
 
-    dists = np.abs(np.diff(self.rootsarr, axis=0))
-    cdists = np.cumsum(dists, axis=0)
-    cdistsn = cdists/cdists[-1, :]
-    cdistsn_ = np.vstack((np.zeros((1, nof_poles), dtype=np.float_), cdistsn))
-    sizearr = aux.data_scaling(cdistsn_, self.min_markersize, self.max_markersize, func='linear')
+    # dists = np.abs(np.diff(self.rootsarr, axis=0))
+    # cdists = np.cumsum(dists, axis=0)
+    # cdistsn = cdists/cdists[-1, :]
+    # cdistsn_ = np.vstack((np.zeros((1, nof_poles), dtype=np.float_), cdistsn))
+    # sizearr = aux.data_scaling(cdistsn_, self.min_markersize, self.max_markersize, func='linear')
 
     self.fig = plt.figure(aux.figname("root-locus"))
     self.ax = self.fig.add_subplot(111)
@@ -427,29 +444,30 @@ class RootLocus(object):
       is_valid_y = (worfs >= ylims[0])*(worfs <= ylims[1])
       is_valid = is_valid_x*is_valid_y
 
-      colvec = aux.color_vector(self.nof_K, colors[iroot, :], os=0.35)
-      cmap = ListedColormap(colvec, name="root_locus_p{:d}".format(iroot))
-      self.ax.plot(dcays[is_valid], worfs[is_valid], '-', color=colors[iroot, :], linewidth=0.5,
-                   picker=False, zorder=1)
-      self.ax.scatter(dcays[is_valid], worfs[is_valid], s=sizearr[is_valid, iroot],
-                      c=sizearr[is_valid, iroot], cmap=cmap, marker='o', picker=True,
-                      label="pole {:d}".format(iroot), zorder=3)
+      # colvec = aux.color_vector(self.nof_K, colors[iroot, :], os=0.35)
+      # cmap = ListedColormap(colvec, name="root_locus_p{:d}".format(iroot))
+      self.ax.plot(dcays[is_valid], worfs[is_valid], '-', color=colors[iroot, :], linewidth=2,
+                   picker=True, label="pole {:d}".format(iroot), zorder=1)
+      # self.ax.scatter(dcays[is_valid], worfs[is_valid], s=sizearr[is_valid, iroot],
+      #                 c=sizearr[is_valid, iroot], cmap=cmap, marker='o', picker=True,
+      #                 label="pole {:d}".format(iroot), zorder=3)
 
       if plot_ref:
         self.ax.plot(dcays_arr[iref, iroot], worfs_arr[iref, iroot], '*', mew=2, mfc='none',
-                     markersize=20, mec=colors[iroot, :], zorder=2)
+                     markersize=10, mec=colors[iroot, :], zorder=2)
       # plot poles and zeros if flag is on
       if plot_pz:
         self.ax.plot(*split_s_plane_coords(self.poles[iipoles[iroot]], Hz=self.Hz), 'x', mew=2,
-                     mfc='none', markersize=15, mec=colors[iroot, :], zorder=2)
+                     markersize=10, mec=colors[iroot, :], zorder=2)
       # plot clicked on artists (clarts)
-      clarts[iroot], = self.ax.plot(0., 0., 's', mec='k', mfc='none', markersize=15, mew=3,
+      clarts[iroot], = self.ax.plot(0., 0., 's', mec='k', mfc='none', markersize=7, mew=2,
                                     visible=False, zorder=10)
 
     if plot_pz:
       for izero in range(nof_zeros):
+        # pass
         self.ax.plot(*split_s_plane_coords(self.zeros[izero], Hz=self.Hz), 'o', mew=2,
-                     mfc='none', markersize=15, mec=colors[iizeros[izero], :], zorder=3)
+                     markersize=7, mfc='none', mec=colors[iizeros[izero], :], zorder=3)
 
     # add the zeta lines
     self.plot_zeta_lines(False)
@@ -1082,6 +1100,8 @@ def normalize_plant_inputs(Hplant, tag_sufx="_norm", prune=True, keep_inputs=Tru
   --------
   Hplant : block object
            The new plant object with scaled/normalized inputs
+  input_sfs : np.ndarray of floats
+              The applied scale factors for all inputs
   """
   input_sfs = 1./np.linalg.norm(Hplant.B, axis=0, ord=2)
 
@@ -1098,7 +1118,7 @@ def normalize_plant_inputs(Hplant, tag_sufx="_norm", prune=True, keep_inputs=Tru
   if keep_inputs:
     Hplant_n.inputnames = aux.arrayify([input_prefx + name for name in Hplant.inputnames])
 
-  return Hplant_n
+  return Hplant_n, input_sfs
 
 
 def modify_plant(Hplant, what2mod, replace=None, rename=None, reorder=None, remove=None):
