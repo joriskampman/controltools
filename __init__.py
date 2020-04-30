@@ -16,6 +16,8 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 import pdb  # noqa
 import sys
+from copy import deepcopy
+from functools import partial
 
 
 class RootLocus(object):
@@ -906,12 +908,12 @@ def _prune(Hsys, strlist, inout, keep_or_prune):
   if inout == 'in':
     Hsys.B = Hsys.B[:, indices2keep]
     Hsys.D = Hsys.D[:, indices2keep]
-    Hsys.inputnames = aux.listify(aux.arrayify(Hsys.inputnames)[indices2keep])
+    Hsys.inputnames = aux.arrayify(Hsys.inputnames)[indices2keep]
     Hsys.inputs = len(indices2keep)
   elif inout == 'out':
     Hsys.C = Hsys.C[indices2keep, :]
     Hsys.D = Hsys.D[indices2keep, :]
-    Hsys.outputnames = aux.listify(aux.arrayify(Hsys.outputnames)[indices2keep])
+    Hsys.outputnames = aux.arrayify(Hsys.outputnames)[indices2keep]
     Hsys.outputs = len(indices2keep)
 
   return indices2keep
@@ -1065,10 +1067,10 @@ def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, p
   return Hsys
 
 
-def normalize_plant_inputs(Hplant, tag_sufx="_norm", prune=True, keep_inputs=True,
-                           input_prefx="[norm]"):
+def scale_plant_controls(Hplant, order=2, scale_to=1., tag_sufx="_norm", prune=True,
+                         input_prefx="[norm]", keep_names=True):
   """
-  normalizes the inputs to a plant.
+  Scales either the controls to a plant
 
   This encompasses the normalizing the vector 2-norms of the columns of the input matrix (B). This
   prevents numerical errors in case the impact of different inputs differs by several orders of
@@ -1084,17 +1086,21 @@ def normalize_plant_inputs(Hplant, tag_sufx="_norm", prune=True, keep_inputs=Tru
   ----------
   Hplant : block object
            The plant for which the inputs must be normalized
+  order : [ non negative int | np.inf | 'fro' | 'nuc'], default=2
+          The order of the norm to scale to
+  scale_to : float, default=1.
+             the scale to value. A value of 1 means normalization
   tag_sufx : str, default="_norm"
              The suffix to the tag of the plant for the new normalized-input plant
   prune : bool, default=True
           Whether the prune the internal connections between the normalization block and the plant
-  keep_inputs : bool, default=True
+  keep_names : bool, default=True
                 if True, the input names of the plant will be kept and mapped on the normalization
                 blocks inputs with a prefix. In case prune=False, be carefull to not cause
                 confusion
   input_prefx : str, default="[norm]"
                 The prefix to the input names for the new normalized-input plant. prefix is only
-                used in case *keep_inputs=True*
+                used in case *keep_names=True*
 
   Returns:
   --------
@@ -1103,7 +1109,8 @@ def normalize_plant_inputs(Hplant, tag_sufx="_norm", prune=True, keep_inputs=Tru
   input_sfs : np.ndarray of floats
               The applied scale factors for all inputs
   """
-  input_sfs = 1./np.linalg.norm(Hplant.B, axis=0, ord=2)
+
+  input_sfs = scale_to/np.linalg.norm(Hplant.B, axis=0, ord=order)
 
   # make input normalization block
   norm_blocks = [Hplant]
@@ -1115,7 +1122,7 @@ def normalize_plant_inputs(Hplant, tag_sufx="_norm", prune=True, keep_inputs=Tru
     Qstrings.append(Qstring)
 
   Hplant_n = build_system(norm_blocks, Qstrings=Qstrings, tag=Hplant.tag + tag_sufx, prune=prune)
-  if keep_inputs:
+  if keep_names:
     Hplant_n.inputnames = aux.arrayify([input_prefx + name for name in Hplant.inputnames])
 
   return Hplant_n, input_sfs
@@ -1144,7 +1151,16 @@ def modify_plant(Hplant, what2mod, replace=None, rename=None, reorder=None, remo
     dimdict['D'] = [0]
 
   # 1: removing states
-  irem = aux.find_elm_containing_substrs(remove, getattr(Hplant, nameattr))
+  remove = aux.listify(remove)
+  irem = []
+  for remelm in aux.listify(remove):
+    if isinstance(remelm, str):
+      irem_ = aux.find_elm_containing_substrs(remelm, getattr(Hplant, nameattr), strmatch='all')
+      if len(irem_) > 0:
+        irem += aux.listify(irem_)
+    else:
+      irem.append(remelm)
+
   ikeep = np.setdiff1d(np.r_[:getattr(Hplant, what2mod)], irem)
 
   # update states/inputs/outputs
@@ -1191,6 +1207,17 @@ def modify_plant(Hplant, what2mod, replace=None, rename=None, reorder=None, remo
       setattr(Hplant, matid, mdata)
 
     setattr(Hplant, nameattr, getattr(Hplant, nameattr)[isort])
+
+
+def set_plant_output_to_states(Hplant):
+  """
+  set all outputs to the states (for LQR control)
+  """
+  # make outputs equal to the states
+  Hplant.C = np.eye(Hplant.states, dtype=float)
+  Hplant.D = np.zeros((Hplant.states, Hplant.inputs), dtype=float)
+  Hplant.outputs = Hplant.states
+  Hplant.outputnames = Hplant.statenames.copy()
 
 
 def make_block(btype, tag, dt=0., inames=None, onames=None, force_statespace=True,
@@ -1256,7 +1283,7 @@ def make_block(btype, tag, dt=0., inames=None, onames=None, force_statespace=Tru
     if 'ss' in blargs.keys():
       block = blargs['ss']
     elif 'ssdata' in blargs.keys():
-      block = cm.StateSpace(**blargs, remove_useless=remove_useless)
+      block = cm.StateSpace(*blargs['ssdata'], remove_useless=remove_useless)
     elif 'tf' in blargs.keys():
       block = cm.tf2ss(blargs['tf'])
     is_plant = True
@@ -1336,6 +1363,127 @@ def make_block(btype, tag, dt=0., inames=None, onames=None, force_statespace=Tru
   return block
 
 
+def lqr_sub(Hplant, substates=None, subinputs=None, Q=None, R=None, return_subplant=False):
+  """
+  fill in
+  """
+  class UncontrollableError(Exception):
+    pass
+
+  Hsub = deepcopy(Hplant)
+
+  if substates is not None:
+    nof_substates = len(substates)
+    istates = np.array([aux.find_elm_containing_substrs(substate, Hplant.statenames, nreq=1,
+                                                        strmatch='all') for substate in substates])
+    modify_plant(Hsub, 'states', remove=np.setdiff1d(np.r_[:Hsub.states], istates))
+  else:
+    nof_substates = Hsub.states
+    istates = np.r_[:nof_substates]
+
+  if subinputs is not None:
+    nof_subinputs = len(subinputs)
+    iinputs = [aux.find_elm_containing_substrs(subinput, Hplant.inputnames, nreq=1, strmatch='all')
+               for subinput in subinputs]
+    modify_plant(Hsub, 'inputs', remove=np.setdiff1d(np.r_[:Hsub.inputs], iinputs))
+  else:
+    nof_subinputs = Hsub.inputs
+    iinputs = np.r_[:nof_subinputs]
+
+  # modify the output matrix C to be equal to the input matrix X
+  Hsub.C = np.eye(nof_substates)
+  Hsub.outputnames = Hsub.statenames.copy()
+  Hsub.outputs = Hsub.inputs
+  Hsub.D = np.zeros((nof_substates, nof_subinputs), dtype=np.float)
+
+  # what's the rank
+  # check controllability
+  Cmat = cm.ctrb(Hsub.A, Hsub.B)
+  rank = np.linalg.matrix_rank(Cmat)
+  if nof_substates > rank:
+    raise UncontrollableError("The {:d}-state subsystem has rank {:d} --> not controllable".
+                              format(nof_substates, rank))
+  else:
+    print("System is controllable")
+
+  # do the LQR
+  if Q is None:
+    Q = np.eye(nof_substates)
+  if R is None:
+    R = np.eye(nof_subinputs)
+  print(Q)
+  Ksub = cm.lqr(Hsub, Q, R)[0]
+
+  out = (Ksub, iinputs, istates, Cmat)
+  if return_subplant:
+    out = (*out, Hsub)
+
+  return out
+
+
+def _check_xor_inputs(in1, in2, raise_exception=False, issue_warning=True):
+  """
+  handle the raising of an error, giving of a warning
+  """
+  class ConflictingInputsError(Exception):
+    pass
+
+  is_ok = True
+  if in1 is None and in2 is None:
+    is_ok = False
+    str_ = "Both inputs are None. Exactly 1 input may be equal to None"
+    if raise_exception:
+      raise ConflictingInputsError(str_)
+    elif issue_warning:
+      warn(str_, category=UserWarning)
+
+  if in1 is not None and in2 is not None:
+    is_ok = False
+    str_ = "Both inputs are not-None. Exactly 1 input may have a value other than None"
+    if raise_exception:
+      raise ConflictingInputsError(str_)
+    elif issue_warning:
+      warn(str_, category=UserWarning)
+
+  return is_ok
+
+
+def split_model_inputs(Hplant, perts=None, conts=None, return_new_model=False):
+  """
+  split the model disturbances from the Plant block (made with make_block function)
+  """
+  if not _check_xor_inputs(perts, conts, raise_exception=False, issue_warning=True):
+    return Hplant, np.array([], dtype=float)
+
+  list_ = perts if conts is None else conts
+  ifnd = np.empty(len(list_), dtype=int)
+  for idx, elm in enumerate(list_):
+    ifnd[idx] = aux.find_elm_containing_substrs(elm, Hplant.inputnames, nreq=1, strmatch='all')
+
+  ifnd = aux.arrayify(ifnd)
+
+  # if perturbations are not given -> deduce then from the controls (which are ifnd)
+  if perts is None:
+    ifnd = np.setdiff1d(np.r_[:Hplant.inputs], ifnd, assume_unique=True)
+
+  # extract the perturbations into a P matrix and modify the plant
+  P = deepcopy(Hplant.B[:, ifnd])
+  pnames = deepcopy(Hplant.inputnames[ifnd])
+
+  if return_new_model:
+    Hplant_new = deepcopy(Hplant)
+  else:
+    Hplant_new = Hplant
+
+  modify_plant(Hplant_new, 'inputs', remove=ifnd)
+
+  outs = (P, pnames)
+  if return_new_model:
+    outs = (*outs, Hplant_new)
+
+  return outs
+
+
 def load_models(files, dirname='', states_to_ignore=[], vwinds_wanted=None, azis_wanted=None,
                 dt=0.):
   """
@@ -1396,19 +1544,37 @@ def plot_multiple_bodes(Hplants_list, inputname, outputname, split=False, show_n
   return fig, axs
 
 
-def _handle_iin_iout(iin, iout, Hplant):
+def _handle_iin_iout(iins, iouts, block):
   """
   handle different forms of iin, iout (str, array, whatever)
   """
 
   # do check on iin and iout
-  if isinstance(iin, str):
-    iin = aux.find_elm_containing_substrs(tuple(iin.split()), Hplant.inputnames, nreq=1)
+  if iins is None:
+    iinos = np.r_[:block.inputs]
+  else:
+    iins = aux.arrayify(iins)
+    iinos = np.empty_like(iins, dtype=int)
+    for ielm, iini in enumerate(iins):
+      if isinstance(iini, str):
+        iinos[ielm] = aux.find_elm_containing_substrs(tuple(iini.split()), block.inputnames,
+                                                      nreq=1)
+      else:
+        iinos[ielm] = np.int(iini)
 
-  if isinstance(iout, str):
-    iout = aux.find_elm_containing_substrs(tuple(iout.split()), Hplant.outputnames, nreq=1)
+  if iouts is None:
+    ioutos = np.r_[:block.outputs]
+  else:
+    iouts = aux.arrayify(iouts)
+    ioutos = np.empty_like(iouts, dtype=int)
+    for ielm, iouti in enumerate(iouts):
+      if isinstance(iouti, str):
+        ioutos[ielm] = aux.find_elm_containing_substrs(tuple(iouti.split()), block.outputnames,
+                                                       nreq=1)
+      else:
+        ioutos[ielm] = np.int(iouti)
 
-  return iin, iout
+  return iinos, ioutos
 
 
 def plot_bode(Hplant, input_=0, output=0, omega_limits=[1e-3, 1e2], omega_num=1e4, dB=True,
@@ -2105,3 +2271,95 @@ def split_s_plane_coords(s_coords, Hz=False):
     sfy = 1.
 
   return aux.split_complex(s_coords, sfx=1, sfy=sfy)
+
+
+def time_response(response_type, sys, inputs=None, outputs=None, **kwargs):
+  """
+  wrapper around the impulse_response and step_response functions in the control module
+  """
+  class TimeResponseTypeError(Exception):
+    pass
+
+  iins, iouts = _handle_iin_iout(inputs, outputs, sys)
+  use_iokwargs = True
+  if response_type.lower().startswith('s'):
+    func = cm.step_response
+  elif response_type.lower().startswith('i'):
+    func = cm.impulse_response
+  elif response_type.lower().startswith('f'):
+    use_iokwargs = False
+    # prepare some forced response variables
+    U = kwargs['U']
+    if sys.isctime:
+      ts = kwargs['T']
+      if np.isscalar(U):
+        U = np.ones_like(ts, dtype=float)*U
+      elif U.size == 1:
+        U *= np.ones_like(ts, dtype=float)
+
+    func = partial(cm.forced_response, U=U)
+  else:
+    raise TimeResponseTypeError("The time response type ({}) is not defined".format(response_type))
+
+  # loop all inputs vs all outputs
+  for _iin, iin in enumerate(iins):
+    if use_iokwargs:
+      kwargs['input'] = np.int(iin)
+    ts, ydata = func(sys, **kwargs)[:2]
+
+    if _iin == 0:
+      datamat = np.empty((iins.size, iouts.size, ts.size), dtype=np.float)
+    datamat[_iin, :, :] = ydata[iouts, :]
+
+  return ts, datamat, iins, iouts
+
+
+def labelmaker(sys, input_=None, output=None, max_char=np.inf, gluestr=" -> ", what2keep='begin',
+               placeholder="..", prepend_tag=True):
+  """
+  make a label based on the system's input and output names
+  """
+  class NoInputDefinedError(Exception):
+    pass
+
+  class NoOutputDefinedError(Exception):
+    pass
+
+  if input_ is None:
+    if sys.inputs == 1:
+      input_ = 0
+    else:
+      raise NoInputDefinedError("This system has {} inputs, provide an input please".
+                                format(sys.inputs))
+
+  if output is None:
+    if sys.outputs == 1:
+      output = 0
+    else:
+      raise NoOutputDefinedError("This system has {} outputs, provide an output please".
+                                 format(sys.outputs))
+
+  label = ''
+  nof_in_tag = 0
+  if prepend_tag:
+    label += "[{}] ".format(sys.tag)
+    nof_in_tag = len(label)
+
+  iin, iout = _handle_iin_iout(input_, output, sys)
+
+  sfrom = sys.inputnames[iin.item()]
+  sto = sys.outputnames[iout.item()]
+  if not np.isinf(max_char):
+    max_char_per_part = np.int((max_char - len(gluestr) - nof_in_tag)/2 + 0.5)
+    sfrom = aux.short_string(sfrom, max_char_per_part, what2keep=what2keep,
+                             placeholder=placeholder)
+    sto = aux.short_string(sto, max_char_per_part, what2keep=what2keep, placeholder=placeholder)
+
+  label += "{:s} -> {:s}".format(sfrom, sto)
+
+  return label
+
+
+
+
+
