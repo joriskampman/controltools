@@ -604,39 +604,42 @@ def plot_state_space_matrices(ss, display_type='compressed', show_values=True, z
       raise ValueError("The *display_type* keyword argument value ({}) is not valid.".
                        format(display_type))
 
-    nr, nc = matdata.shape
+    title = "{:s} [{:d} x {:d}]".format(key, *matdisp.shape)
+    aux.improvedshow(matdata, ax=ax, fmt="{:.1g}", rlabels=mdict['rowlabels'],
+                     clabels=mdict['collabels'], title=title, invalid=0., **kwargs)
+    # nr, nc = matdata.shape
 
-    ax.imshow(matdisp, **kwargs)
+    # ax.imshow(matdisp, **kwargs)
 
-    # set title, grid and labels
-    ax.set_title("{:s} [{:d} x {:d}]".format(key, nr, nc))
-    ax.set_xticks(np.r_[:nc])
-    ax.set_xticklabels(ax.get_xticks(), fontsize=7)
-    if mdict['show_x_labels']:
-      ax.set_xticklabels(mdict['collabels'], fontsize=7, rotation=45, va='top', ha='right')
-    ax.set_yticks(np.r_[:nr])
-    ax.set_yticklabels(ax.get_yticks(), fontsize=7)
-    if mdict['show_y_labels']:
-      ax.set_yticklabels(mdict['rowlabels'], fontsize=7)
-    ax.tick_params(axis='both', which='major', length=0)
+    # # set title, grid and labels
+    # ax.set_title("{:s} [{:d} x {:d}]".format(key, nr, nc))
+    # ax.set_xticks(np.r_[:nc])
+    # ax.set_xticklabels(ax.get_xticks(), fontsize=7)
+    # if mdict['show_x_labels']:
+    #   ax.set_xticklabels(mdict['collabels'], fontsize=7, rotation=45, va='top', ha='right')
+    # ax.set_yticks(np.r_[:nr])
+    # ax.set_yticklabels(ax.get_yticks(), fontsize=7)
+    # if mdict['show_y_labels']:
+    #   ax.set_yticklabels(mdict['rowlabels'], fontsize=7)
+    # ax.tick_params(axis='both', which='major', length=0)
 
-    # make minor ticks for dividing lines
-    ax.set_xticks(np.r_[-0.5:nc+0.5:1], minor=True)
-    ax.set_yticks(np.r_[-0.5:nr+0.5:1], minor=True)
+    # # make minor ticks for dividing lines
+    # ax.set_xticks(np.r_[-0.5:nc+0.5:1], minor=True)
+    # ax.set_yticks(np.r_[-0.5:nr+0.5:1], minor=True)
 
-    ax.grid(which='minor', linewidth=1)
+    # ax.grid(which='minor', linewidth=1)
 
-    # show the values in the matrix
-    if show_values:
-      for irow in range(nr):
-        for icol in range(nc):
-          if not np.isclose(matdata[irow, icol], 0.):
-            ax.text(icol, irow, "{:.1g}".format(matdata[irow, icol]), fontsize=6, ha='center',
-                    va='center', clip_on=True, bbox={'boxstyle':'square',
-                                                     'pad':0.0,
-                                                     'facecolor': 'none',
-                                                     'lw': 0.,
-                                                     'clip_on': True})
+    # # show the values in the matrix
+    # if show_values:
+    #   for irow in range(nr):
+    #     for icol in range(nc):
+    #       if not np.isclose(matdata[irow, icol], 0.):
+    #         ax.text(icol, irow, "{:.1g}".format(matdata[irow, icol]), fontsize=6, ha='center',
+    #                 va='center', clip_on=True, bbox={'boxstyle':'square',
+    #                                                  'pad':0.0,
+    #                                                  'facecolor': 'none',
+    #                                                  'lw': 0.,
+    #                                                  'clip_on': True})
 
     if zero_marker is not None:
       rcs = np.argwhere(np.isclose(0., matdata))
@@ -1214,8 +1217,8 @@ def set_plant_output_to_states(Hplant):
   set all outputs to the states (for LQR control)
   """
   # make outputs equal to the states
-  Hplant.C = np.eye(Hplant.states, dtype=float)
-  Hplant.D = np.zeros((Hplant.states, Hplant.inputs), dtype=float)
+  Hplant.C = np.matrix(np.eye(Hplant.states, dtype=float))
+  Hplant.D = np.matrix(np.zeros((Hplant.states, Hplant.inputs), dtype=float))
   Hplant.outputs = Hplant.states
   Hplant.outputnames = Hplant.statenames.copy()
 
@@ -1363,7 +1366,7 @@ def make_block(btype, tag, dt=0., inames=None, onames=None, force_statespace=Tru
   return block
 
 
-def lqr_sub(Hplant, substates=None, subinputs=None, Q=None, R=None, return_subplant=False):
+def lqr_sub(Hplant, statmat=None, conmat=None, Q=None, R=None, return_subplant=False):
   """
   fill in
   """
@@ -1372,29 +1375,35 @@ def lqr_sub(Hplant, substates=None, subinputs=None, Q=None, R=None, return_subpl
 
   Hsub = deepcopy(Hplant)
 
-  if substates is not None:
+  if statmat is not None:
+    substates = [state[0] for state in statmat]
     nof_substates = len(substates)
     istates = np.array([aux.find_elm_containing_substrs(substate, Hplant.statenames, nreq=1,
                                                         strmatch='all') for substate in substates])
     modify_plant(Hsub, 'states', remove=np.setdiff1d(np.r_[:Hsub.states], istates))
+    Q = np.diag(np.array([state[1] for state in statmat], dtype=float))
   else:
     nof_substates = Hsub.states
+    Q = np.eye(nof_substates, dtype=float)
     istates = np.r_[:nof_substates]
 
-  if subinputs is not None:
-    nof_subinputs = len(subinputs)
+  if conmat is not None:
+    subcontrols = [con[0] for con in conmat]
+
+    nof_controls = len(subcontrols)
     iinputs = [aux.find_elm_containing_substrs(subinput, Hplant.inputnames, nreq=1, strmatch='all')
-               for subinput in subinputs]
+               for subinput in subcontrols]
     modify_plant(Hsub, 'inputs', remove=np.setdiff1d(np.r_[:Hsub.inputs], iinputs))
+    R = np.diag(np.array([control[1] for control in conmat], dtype=float))
   else:
-    nof_subinputs = Hsub.inputs
-    iinputs = np.r_[:nof_subinputs]
+    nof_controls = Hsub.inputs
+    iinputs = np.r_[:nof_controls]
 
   # modify the output matrix C to be equal to the input matrix X
   Hsub.C = np.eye(nof_substates)
   Hsub.outputnames = Hsub.statenames.copy()
   Hsub.outputs = Hsub.inputs
-  Hsub.D = np.zeros((nof_substates, nof_subinputs), dtype=np.float)
+  Hsub.D = np.zeros((nof_substates, nof_controls), dtype=np.float)
 
   # what's the rank
   # check controllability
@@ -1410,7 +1419,7 @@ def lqr_sub(Hplant, substates=None, subinputs=None, Q=None, R=None, return_subpl
   if Q is None:
     Q = np.eye(nof_substates)
   if R is None:
-    R = np.eye(nof_subinputs)
+    R = np.eye(nof_controls)
   print(Q)
   Ksub = cm.lqr(Hsub, Q, R)[0]
 
@@ -2360,6 +2369,83 @@ def labelmaker(sys, input_=None, output=None, max_char=np.inf, gluestr=" -> ", w
   return label
 
 
+def negate_inputs(sys, inputs):
+  """
+  invert an input and return a new plant
+  """
+  Qstrings = []
+  inputs = aux.arrayify(inputs)
+  blocks = [sys]
+  iins = []
+  for input_ in inputs:
+    if isinstance(input_, str):
+      iin = aux.find_elm_containing_substrs(input_, sys.inputnames, nreq=1, strmatch='all')
+    else:
+      iin = input_
+    iins.append(iin)
+    bl_ = make_block("inv", tag="inv{}".format(iin))
+    blocks.append(bl_)
+    Qstrings.append((bl_.tag, sys.inputnames[iin]))
+
+  sysi = build_system(blocks, tag="planti", Qstrings=Qstrings, prune=True)
+
+  # replace the input name
+  for iin in iins:
+    ifrom = aux.find_elm_containing_substrs("inv{}".format(iin), sysi.inputnames, nreq=1,
+                                            strmatch="all")
+    sysi.inputnames[ifrom] = "[inv]{:s}".format(sys.inputnames[iin])
+
+  return sysi
 
 
+def pole_contributions(sys, plot=True, thres=5.):
+  """
+  determine the pole contributions for a plant
+  """
+  eigvals, eigvecs = np.linalg.eig(np.array(sys.A))
+  tf_display = (np.imag(eigvals) >= 0.) + ~np.iscomplex(eigvals)
+
+  # keep 1 pole per conjugate pair (Im > 0)
+  eigvals_ = eigvals[tf_display]
+  eigvecs_ = eigvecs[:, tf_display]
+  nof_poles_to_show = eigvals_.size
+
+  # calculate criticalities (for ordering)
+  dcays = np.real(eigvals_)
+  freqs = w2f(np.imag(eigvals_))
+  dampratios = np.cos(np.arctan(f2w(freqs)/dcays))
+  criticalities = np.abs(dcays)*dampratios
+  isort_crit = np.argsort(criticalities)
+
+  # initialize labels for displaying matrix via improveshow
+  if plot:
+    clabels = [name + " - {:d}".format(ielm) for ielm, name in enumerate(sys.statenames)]
+    rlabels = []
+
+  contribution_matrix = np.zeros((nof_poles_to_show, sys.states), dtype=float)
+  for ipole, iisort_crit in enumerate(isort_crit):
+    # make row label (pole label)
+    if plot:
+      rlabels.append("f={:0.0f} mHz, $\\zeta$={:0.3f}, cri={:.1g} - {:d}".
+                     format(1e3*freqs[iisort_crit], dampratios[iisort_crit],
+                            criticalities[iisort_crit], ipole))
+
+    # calc contributions of physical states
+    eigvec = np.abs(eigvecs_[:, iisort_crit])
+    contribs = eigvec/eigvec.sum()
+
+    isort_contrib = np.argsort(contribs, axis=0)[-1::-1]
+    for iisort_contrib in isort_contrib:
+      contribution_matrix[iisort_crit, iisort_contrib] = contribs[iisort_contrib]
+
+  outs = eigvals_, eigvecs_,contribution_matrix
+
+  if plot:
+    cmatperc = np.int_(100*contribution_matrix.copy() + 0.5)
+    _, ax = aux.improvedshow(cmatperc, cmap='Reds', fmt="{:2d}", show_values=True, clabels=clabels,
+                             rlabels=rlabels, fignum="Pole contribution matrix",
+                             invalid=[-np.inf, thres], title="Pole contributions", aspect='auto')
+    outs = (*outs, ax)
+
+  return outs
 
