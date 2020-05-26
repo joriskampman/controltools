@@ -965,11 +965,26 @@ def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, p
   prune : bool, default=False
           prune the internal connections made. These will not show up on the input(name)s and
           output(name)s lists
+  reset_names : bool, default=False
+                Flag to indicate if the input and output names must be reset, can only be applied
+                if `prune=True` and the resulting system is a SISO system
 
   Returns:
   --------
   out : state-space object
   """
+  def _handle_opens_shorts(opshs, blocks):
+    """
+    handles the input opens and shorts
+    """
+    if opshs == "all":
+      opshs = blocks
+    opshs = aux.listify(opshs)
+    opshs = [opsh.tag if isinstance(opsh, cm.StateSpace) else opsh for opsh in opshs]
+    opshs = aux.tuplify(opshs)
+
+    return opshs
+
   blocks = aux.listify(blocks)
 
   # next step: define interconnections based on input and outputnames
@@ -980,15 +995,15 @@ def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, p
       block_out = blocks[iblock]
       block_in = blocks[iblock + 1]
       if not block_out.issiso():
-        raise ValueError("In case Qstrings=None, all blocks must be SISO." +
+        raise ValueError("In case Qstrings=None, all blocks must be SISO.",
                          "block with tag `{}` is not!".format(block_out.tag))
 
       Qstrings.append((block_out.outputnames[0], block_in.inputnames[0]))
 
   Qstrings_arr = np.array(Qstrings, dtype=[('outputs', object), ('inputs', object)])
 
-  opens = aux.tuplify(opens)
-  shorts = aux.tuplify(shorts)
+  shorts = _handle_opens_shorts(shorts, blocks)
+  opens = _handle_opens_shorts(opens, blocks)
 
   for iblock in range(len(blocks)):
     btag = blocks[iblock].tag
@@ -1054,10 +1069,17 @@ def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, p
       if hasattr(blocks[iplant], attr):
         setattr(Hsys, attr, getattr(blocks[iplant], attr))
 
+  else:
+    Hsys.is_plant = False
+
   if prune:
     # prune all that are connected (be carefull with this automated setting!)
     Qarr = aux.arrayify(Qstrings)
     prune_ios(Hsys, inputnames=Qarr[:, 1], outputnames=Qarr[:, 0], keep_or_prune='prune')
+
+    if reset_names and Hsys.issiso():
+      Hsys.inputnames = ["{:s}_in0".format(tag)]
+      Hsys.outputnames = ["{:s}_out0".format(tag)]
 
   return Hsys
 
@@ -1215,6 +1237,28 @@ def set_plant_output_to_states(Hplant):
   Hplant.outputnames = Hplant.statenames.copy()
 
 
+def add_plant_inputs_to_outputs(sys, feed_inputs=None, prefix='[u]'):
+  """
+  add the inputs to the outputs if they do not exist yet
+  """
+  ifeeds, _ = _handle_iin_iout(feed_inputs, None, sys)
+
+  # check if they already exist
+  does_not_already_exist = [name not in sys.outputnames for name in sys.inputnames[ifeeds]]
+
+  ifeeds = ifeeds[does_not_already_exist]
+
+  nof_feeds = ifeeds.size
+  if nof_feeds > 0:
+    # add names to outputnames
+    feednames = [prefix + name for name in sys.inputnames[ifeeds]]
+    sys.outputnames = aux.arrayify(sys.outputnames.tolist() + feednames)
+    sys.C = np.vstack((sys.C, np.zeros((nof_feeds, sys.states), dtype=float)))
+    sys.D = np.vstack((sys.D, np.eye(nof_feeds, dtype=float)))
+
+    sys.outputs = sys.C.shape[0]
+
+
 def make_block(btype, tag, dt=0., inames=None, onames=None, force_statespace=True,
                keep_names=False, **blargs):
   """
@@ -1358,7 +1402,7 @@ def make_block(btype, tag, dt=0., inames=None, onames=None, force_statespace=Tru
   return block
 
 
-def lqr_sub(Hplant, statmat=None, conmat=None, Q=None, R=None, return_subplant=False):
+def lqr_sub(Hplant, statmat=None, conmat=None, sfR2Q=1., return_subplant=False):
   """
   fill in
   """
@@ -1407,13 +1451,7 @@ def lqr_sub(Hplant, statmat=None, conmat=None, Q=None, R=None, return_subplant=F
   else:
     print("System is controllable")
 
-  # do the LQR
-  if Q is None:
-    Q = np.eye(nof_substates)
-  if R is None:
-    R = np.eye(nof_controls)
-  print(Q)
-  Ksub = cm.lqr(Hsub, Q, R)[0]
+  Ksub = cm.lqr(Hsub, Q, sfR2Q*R)[0]
 
   out = (Ksub, iinputs, istates, Cmat)
   if return_subplant:
@@ -1456,12 +1494,13 @@ def split_model_inputs(Hplant, perts=None, conts=None, return_new_model=False):
   if not _check_xor_inputs(perts, conts, raise_exception=False, issue_warning=True):
     return Hplant, np.array([], dtype=float)
 
-  list_ = perts if conts is None else conts
-  ifnd = np.empty(len(list_), dtype=int)
+  list_ = aux.listify(perts if conts is None else conts)
+  ifnd = []
   for idx, elm in enumerate(list_):
-    ifnd[idx] = aux.find_elm_containing_substrs(elm, Hplant.inputnames, nreq=1, strmatch='all')
+    ifnd_ = aux.find_elm_containing_substrs(elm, Hplant.inputnames, strmatch='all')
+    ifnd += aux.listify(ifnd_)
 
-  ifnd = aux.arrayify(ifnd)
+  ifnd = np.unique(aux.arrayify(ifnd))
 
   # if perturbations are not given -> deduce then from the controls (which are ifnd)
   if perts is None:
@@ -1579,19 +1618,19 @@ def _handle_iin_iout(iins, iouts, block):
 
 
 def plot_bode(Hplant, input_=0, output=0, omega_limits=[1e-3, 1e2], omega_num=1e4, dB=True,
-              Hz=True, show_margins=False, show_nyquist=False, fig=None, axs=None, color='b',
+              Hz=True, show_margins=False, show_nyquist=False, axs=None, color='b',
               linestyle='-', show_legend=True, label=None, figname="Bode plots",
-              suptitle=None):
+              dress_up_axes=True):
   """
   plot a single bode plot
   """
   iin, iout = _handle_iin_iout(input_, output, Hplant)
 
-  if figname is None:
-    figname = suptitle
+  iin = iin.item()
+  iout = iout.item()
 
   # plot all possible transfer functions
-  if fig is None:
+  if axs is None:
     fig = plt.figure(aux.figname(figname))
     if show_nyquist:
       gs = fig.add_gridspec(2, 2)
@@ -1599,7 +1638,11 @@ def plot_bode(Hplant, input_=0, output=0, omega_limits=[1e-3, 1e2], omega_num=1e
       gs = fig.add_gridspec(2, 1)
     axs = [fig.add_subplot(gs[0, 0])]
     axs.append(fig.add_subplot(gs[1, 0], sharex=axs[0]))
-    fig.suptitle(suptitle, fontweight="bold", fontsize=12)
+
+    if show_nyquist:
+      axs.append(fig.add_subplot(gs[:, 1]))
+
+  if dress_up_axes:
     axs[0].set_title("Gain/Magnitude")
     if Hz:
       axs[0].set_xlabel("Frequency [Hz]")
@@ -1618,7 +1661,6 @@ def plot_bode(Hplant, input_=0, output=0, omega_limits=[1e-3, 1e2], omega_num=1e
     axs[1].axhline(-180, color='k', linestyle=':')
 
     if show_nyquist:
-      axs.append(fig.add_subplot(gs[:, 1]))
       axs[2].set_title("Nyquist plot")
       axs[2].grid(True)
       # plot nyquist
@@ -1662,38 +1704,39 @@ def plot_bode(Hplant, input_=0, output=0, omega_limits=[1e-3, 1e2], omega_num=1e
   gm_, pm_, sm_, wg_, wp_, ws_ = cm.stability_margins(Hsiso_this, returnall=True)
 
   # plot gain margins
-  for wg__, gm__ in zip(wg_, gm_):
-    gmdb = cm.mag2db(gm__)
-    if Hz:
-      wg = w2f(wg__)
-    else:
-      wg = wg__
-    if omega_limits[0] <= wg <= omega_limits[1]:
-      axs[0].plot(wg*np.array([1., 1.]), [0., -gmdb], ':', color=color)
-      axs[0].text(wg, -gmdb/2, "{:0.0f}".format(-gmdb), ha='center', va='center',
-                  fontsize=7, fontweight='bold', color=color, backgroundcolor='w',
-                  bbox={'pad': 0.1, 'color': 'w'})
+  if show_margins:
+    for wg__, gm__ in zip(wg_, gm_):
+      gmdb = cm.mag2db(gm__)
+      if Hz:
+        wg = w2f(wg__)
+      else:
+        wg = wg__
+      if omega_limits[0] <= wg <= omega_limits[1]:
+        axs[0].plot(wg*np.array([1., 1.]), [0., -gmdb], ':', color=color)
+        axs[0].text(wg, -gmdb/2, "{:0.0f}".format(-gmdb), ha='center', va='center',
+                    fontsize=7, fontweight='bold', color=color, backgroundcolor='w',
+                    bbox={'pad': 0.1, 'color': 'w'})
 
-  # phase margins
-  for wp__, pm__ in zip(wp_, pm_):
-    # check if it is relative to -180 or +180
-    if Hz:
-      wp = wp__/(2*np.pi)
-    else:
-      wp = wp__
+    # phase margins
+    for wp__, pm__ in zip(wp_, pm_):
+      # check if it is relative to -180 or +180
+      if Hz:
+        wp = wp__/(2*np.pi)
+      else:
+        wp = wp__
 
-    if omega_limits[0] <= wp <= omega_limits[1]:
-      iomega = aux.get_closest_index(wp__, omegas, suppress_warnings=True)
+      if omega_limits[0] <= wp <= omega_limits[1]:
+        iomega = aux.get_closest_index(wp__, omegas, suppress_warnings=True)
 
-      # offset = -(nof_folds*2. + 1.)*180.
-      ytxt = (phs[iomega] - phs[iomega])/2.
-      ypos = [np.rad2deg(phs[iomega]), -180.]
+        # offset = -(nof_folds*2. + 1.)*180.
+        ytxt = (phs[iomega] - phs[iomega])/2.
+        ypos = [np.rad2deg(phs[iomega]), -180.]
 
-      ytxt = np.mean(ypos)
-      axs[1].plot(wp*np.array([1., 1.]), ypos, ':', color=color)
-      axs[1].text(wp, ytxt, "{:0.0f}".format(pm__),
-                  ha='center', va='center', fontsize=7, fontweight='bold', color=color,
-                  bbox={'pad': 0.1, 'color': 'w'})
+        ytxt = np.mean(ypos)
+        axs[1].plot(wp*np.array([1., 1.]), ypos, ':', color=color)
+        axs[1].text(wp, ytxt, "{:0.0f}".format(pm__),
+                    ha='center', va='center', fontsize=7, fontweight='bold', color=color,
+                    bbox={'pad': 0.1, 'color': 'w'})
 
   if show_nyquist:
     nqi, nqq, nqf = cm.nyquist_plot(Hsiso_this, omega=omegas, Plot=False)
@@ -1710,7 +1753,7 @@ def plot_bode(Hplant, input_=0, output=0, omega_limits=[1e-3, 1e2], omega_num=1e
 
   plt.show(block=False)
 
-  return fig, axs
+  return axs
 
 
 def plot_single_plant_bodes(Hplant, inputs=None, outputs=None, omega_limits=[1e-3, 1e2],
