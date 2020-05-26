@@ -538,20 +538,20 @@ def plot_state_space_matrices(ss, display_type='compressed', show_values=True, z
   bin_cmap = 'traffic_light'
 
   matdict = dict()
-  matdict['A'] = dict(show_x_labels=split_plots,
-                      show_y_labels=True,
+  matdict['A'] = dict(show_col_labels=split_plots,
+                      show_row_labels=True,
                       rowlabels=_labelmaker("d({:s})/dt - {:2d}", ss.statenames),
                       collabels=_labelmaker("{:s} - {:2d}", ss.statenames))
-  matdict['B'] = dict(show_x_labels=split_plots,
-                      show_y_labels=split_plots,
+  matdict['B'] = dict(show_col_labels=split_plots,
+                      show_row_labels=split_plots,
                       rowlabels=_labelmaker("d({:s})/dt - {:2d}", ss.statenames),
                       collabels=_labelmaker("{:s} - {:2d}", ss.inputnames))
-  matdict['C'] = dict(show_x_labels=True,
-                      show_y_labels=True,
+  matdict['C'] = dict(show_col_labels=True,
+                      show_row_labels=True,
                       rowlabels=_labelmaker("{:s} - {:2d}", ss.outputnames),
                       collabels=_labelmaker("{:s} - {:2d}", ss.statenames))
-  matdict['D'] = dict(show_x_labels=True,
-                      show_y_labels=split_plots,
+  matdict['D'] = dict(show_col_labels=True,
+                      show_row_labels=split_plots,
                       rowlabels=_labelmaker("{:s} - {:2d}", ss.outputnames),
                       collabels=_labelmaker("{:s} - {:2d}", ss.inputnames))
 
@@ -605,41 +605,14 @@ def plot_state_space_matrices(ss, display_type='compressed', show_values=True, z
                        format(display_type))
 
     title = "{:s} [{:d} x {:d}]".format(key, *matdisp.shape)
-    aux.improvedshow(matdata, ax=ax, fmt="{:.1g}", rlabels=mdict['rowlabels'],
-                     clabels=mdict['collabels'], title=title, invalid=0., **kwargs)
-    # nr, nc = matdata.shape
+    rlabels = mdict['show_row_labels']*mdict['rowlabels']
+    clabels = mdict['show_col_labels']*mdict['collabels']
 
-    # ax.imshow(matdisp, **kwargs)
-
-    # # set title, grid and labels
-    # ax.set_title("{:s} [{:d} x {:d}]".format(key, nr, nc))
-    # ax.set_xticks(np.r_[:nc])
-    # ax.set_xticklabels(ax.get_xticks(), fontsize=7)
-    # if mdict['show_x_labels']:
-    #   ax.set_xticklabels(mdict['collabels'], fontsize=7, rotation=45, va='top', ha='right')
-    # ax.set_yticks(np.r_[:nr])
-    # ax.set_yticklabels(ax.get_yticks(), fontsize=7)
-    # if mdict['show_y_labels']:
-    #   ax.set_yticklabels(mdict['rowlabels'], fontsize=7)
-    # ax.tick_params(axis='both', which='major', length=0)
-
-    # # make minor ticks for dividing lines
-    # ax.set_xticks(np.r_[-0.5:nc+0.5:1], minor=True)
-    # ax.set_yticks(np.r_[-0.5:nr+0.5:1], minor=True)
-
-    # ax.grid(which='minor', linewidth=1)
-
-    # # show the values in the matrix
-    # if show_values:
-    #   for irow in range(nr):
-    #     for icol in range(nc):
-    #       if not np.isclose(matdata[irow, icol], 0.):
-    #         ax.text(icol, irow, "{:.1g}".format(matdata[irow, icol]), fontsize=6, ha='center',
-    #                 va='center', clip_on=True, bbox={'boxstyle':'square',
-    #                                                  'pad':0.0,
-    #                                                  'facecolor': 'none',
-    #                                                  'lw': 0.,
-    #                                                  'clip_on': True})
+    # print(rlabels)
+    # if len(rlabels) == 0:
+    #   asdf
+    aux.improvedshow(matdata, ax=ax, fmt="{:.1g}", rlabels=rlabels, clabels=clabels, title=title,
+                     invalid=0., **kwargs)
 
     if zero_marker is not None:
       rcs = np.argwhere(np.isclose(0., matdata))
@@ -662,7 +635,7 @@ def plot_state_space_matrices(ss, display_type='compressed', show_values=True, z
     plt.pause(1e-6)
 
 
-def print_overview(Hsys, file=None):
+def print_overview(Hsys, file=None, verbose=False):
   """
   print an overview of the (sub)system/block
   """
@@ -677,23 +650,41 @@ def print_overview(Hsys, file=None):
 
   print("Tag: {:s}".format(Hsys.tag), file=file)
   print("Is plant: {}".format(Hsys.is_plant), file=file)
+  if Hsys.is_plant:
+    print("Operating point values:")
+    print("  wind speed: {:0.1f} [m/s]".format(Hsys.wind_speed))
+    print("  rotor azimuth: {:0.1f} [deg]".format(np.rad2deg(Hsys.azimuth)))
+    print("  rotor speed: {:0.3f} [Hz]".format(w2f(Hsys.ref_rotor_speed)))
+    print("               {:0.1f} [rpm]".format(w2n(Hsys.ref_rotor_speed)))
+    print("  blade pitch: {:0.2f} [deg]".format(np.rad2deg(Hsys.ref_pitch)))
+    print("  generator speed: {:0.1f} [Hz]".format(w2f(Hsys.ref_generator_speed)))
+    print("                   {:0.1f} [rpm]".format(w2n(Hsys.ref_generator_speed)))
+    print("  generator torque: {:0.1f} [kNm]".format(Hsys.ref_generator_torque*1e-3))
   print("Is SISO: {}".format(Hsys.issiso()), file=file)
   print("Is discrete time: {}".format(Hsys.isdtime()), file=file)
   print("Is continuous time: {}".format(Hsys.isctime()), file=file)
-  print("\nNumber of states: {:2d}".format(Hsys.states), file=file)
-  print("--------------------", file=file)
-  for istate, state in enumerate(Hsys.statenames):
-    print("  [{:d}] {:s}".format(istate, state), file=file)
+  print("Number of states: {:2d}".format(Hsys.states), file=file)
 
-  print("\nNumber of inputs: {:2d}".format(Hsys.inputs), file=file)
-  print("--------------------", file=file)
-  for iin, input_ in enumerate(Hsys.inputnames):
-    print("  [{:d}] {:s}".format(iin, input_), file=file)
+  if verbose:
+    print("--------------------", file=file)
+    for istate, state in enumerate(Hsys.statenames):
+      print("  [{:d}] {:s}".format(istate, state), file=file)
+    print("")
 
-  print("\nNumber of outputs: {:2d}".format(Hsys.outputs), file=file)
-  print("---------------------", file=file)
-  for iout, output in enumerate(Hsys.outputnames):
-    print("  [{:d}] {:s}".format(iout, output), file=file)
+  print("Number of inputs: {:2d}".format(Hsys.inputs), file=file)
+
+  if verbose:
+    print("--------------------", file=file)
+    for iin, input_ in enumerate(Hsys.inputnames):
+      print("  [{:d}] {:s}".format(iin, input_), file=file)
+    print("")
+
+  print("Number of outputs: {:2d}".format(Hsys.outputs), file=file)
+  if verbose:
+    print("---------------------", file=file)
+    for iout, output in enumerate(Hsys.outputnames):
+      print("  [{:d}] {:s}".format(iout, output), file=file)
+    print("")
 
 
 def _linear_interpolation(ys, xs, ythres):
@@ -937,7 +928,8 @@ def prune_ios(Hsys, inputnames=None, outputnames=None, keep_or_prune='keep'):
   return iins, iouts
 
 
-def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, prune=False):
+def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, prune=False,
+                 reset_names=False):
   """
   build the system from blocks (make_block) and define the connections in a [(from, to)]
   array-like of tuples.
