@@ -1997,7 +1997,7 @@ def load_state_space_model_file(filename, dirname='.', states_to_ignore=[], dt=0
       Hplant.ref_rotor_speed = ssmat['RotorSpeeds'][0, ivw]
       Hplant.ref_pitch = ssmat['PitchAngles'][ivw, iazi]
       Hplant.ref_generator_torque = ssmat['NomTorqueArray'][ivw, iazi]
-
+      Hplant.gearbox_ratio = ssmat['Gbx'].item()
       Hplant.dirname = dirname
       Hplant.filename = filename
 
@@ -2110,7 +2110,7 @@ def _loadpj(items=None, dirname=None, filenames=None):
     items_to_load = items_to_load0.tolist()
   else:
     if isinstance(items, str):
-      items = [items,]
+      items = [items, ]
 
     items_to_load = []
     for item in items:
@@ -2185,12 +2185,16 @@ def bandpass(f0, damping_ratio, gain=1., dt=0, force_statespace=True):
   return out
 
 
-def low_pass_filter(fc, gain=1., force_statespace=True, dt=0.):
+def low_pass_filter(fc, gain=1., damping_ratio=1., order=1, force_statespace=True, dt=0.):
   """
   define a n-th order low pass filter
   """
   omc = f2w(fc)
-  Hlp = cm.tf([gain], [1./omc, 1.])
+  if order == 1:
+    Hlp = cm.tf([gain], [1./omc, 1.])
+  elif order == 2:
+    Hlp = cm.tf([gain*(omc**2)], [1., 2.*damping_ratio*omc, omc**2])
+
   if force_statespace:
     Hlp = cm.tf2ss(Hlp)
 
@@ -2281,8 +2285,7 @@ def pid(Kp, N=100, form='ideal', force_statespace=True, dt=0., **kwargs):
   elif form.startswith("parallel"):
     Hpid = pidpar(Kp, **kwargs)
   else:
-    raise NotImplementedError("Other forms than `standard`, and `parallel` are not" +
-                              " implemented yet")
+    raise NotImplementedError("Other forms than `standard`, and `parallel` are not implemented")
 
   Hpid.dt = dt
   if force_statespace:
@@ -2334,14 +2337,19 @@ def time_response(response_type, sys, inputs=None, outputs=None, **kwargs):
     use_iokwargs = False
     # prepare some forced response variables
     U = kwargs['U']
+    nof_inputs = sys.inputs
     if sys.isctime:
       ts = kwargs['T']
+      Uall = np.zeros((nof_inputs, ts.size), dtype=float)
       if np.isscalar(U):
-        U = np.ones_like(ts, dtype=float)*U
+        Uall[iins, :] = np.ones_like(ts, dtype=float)*U
       elif U.size == 1:
-        U *= np.ones_like(ts, dtype=float)
+        Uall[iins, :] *= np.ones_like(ts, dtype=float)
+      else:
+        Uall[iins, :] = U
 
-    func = partial(cm.forced_response, U=U)
+    kwargs['U'] = Uall
+    func = cm.forced_response
   else:
     raise TimeResponseTypeError("The time response type ({}) is not defined".format(response_type))
 
@@ -2447,14 +2455,21 @@ def pole_contributions(sys, plot=True, thres=5.):
 
   # calculate criticalities (for ordering)
   dcays = np.real(eigvals_)
+  # find which poles are unstable
+  is_unstables = (dcays > 0.).reshape(-1)
+
   freqs = w2f(np.imag(eigvals_))
   dampratios = np.cos(np.arctan(f2w(freqs)/dcays))
-  criticalities = np.abs(dcays)*dampratios
-  isort_crit = np.argsort(criticalities)
+  criticalities = dcays*dampratios
+  criticalities[np.isnan(criticalities)] = 0.
+  isort_crit = np.argsort(criticalities)[-1::-1]
+  is_unstables = is_unstables[isort_crit]
 
   # initialize labels for displaying matrix via improveshow
   if plot:
     clabels = [name + " - {:d}".format(ielm) for ielm, name in enumerate(sys.statenames)]
+    # clabels = [("<< UNSTABLE >> "*is_unstable + clabel) for is_unstable, clabel in
+    # zip(is_unstables, clabels)]
     rlabels = []
 
   contribution_matrix = np.zeros((nof_poles_to_show, sys.states), dtype=float)
@@ -2473,8 +2488,10 @@ def pole_contributions(sys, plot=True, thres=5.):
     for iisort_contrib in isort_contrib:
       contribution_matrix[iisort_crit, iisort_contrib] = contribs[iisort_contrib]
 
-  outs = eigvals_, eigvecs_,contribution_matrix
+  outs = (eigvals_, eigvecs, contribution_matrix)
 
+  rlabels = [is_unstable*"<<< UNSTABLE >>> " + rlabel for is_unstable, rlabel in
+             zip(is_unstables, rlabels)]
   if plot:
     cmatperc = np.int_(100*contribution_matrix.copy() + 0.5)
     _, ax = aux.improvedshow(cmatperc, cmap='Reds', fmt="{:2d}", show_values=True, clabels=clabels,
