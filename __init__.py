@@ -2308,6 +2308,34 @@ def w2f(omega):
   return omega/(2*np.pi)
 
 
+def w2n(omega):
+  """
+  convert the rad/s units to rpm
+  """
+  return f2n(w2f(omega))
+
+
+def n2w(rpm):
+  """
+  convert the rotational speed to rad/s from rpm
+  """
+  return f2w(n2f(rpm))
+
+
+def f2n(freq):
+  """
+  convert frequency in Hz to rpm
+  """
+  return freq*60.
+
+
+def n2f(rpm):
+  """
+  convert a angular frequency in rpm to Hz
+  """
+  return rpm/60.
+
+
 def split_s_plane_coords(s_coords, Hz=False):
   """
   split any s plane coordinates into dcay and frequency
@@ -2323,6 +2351,30 @@ def split_s_plane_coords(s_coords, Hz=False):
 def time_response(response_type, sys, inputs=None, outputs=None, **kwargs):
   """
   wrapper around the impulse_response and step_response functions in the control module
+
+  Arguments:
+  ----------
+  response_type : ["step" | "forced" | "impulse"]
+                  The time response type
+  sys : StateSpace Object
+        The state-space object for which the time response must be calculated
+  inputs : [ None | str | int | array_like of str or int ], default=None
+           The inputs which are to be perturbed. Can be a single one or a set. Note that the value
+           None will just perturb all inputs
+  outputs : [ None | int | str | array-like of str or int], default=None
+            The outputs which have to be calculated and returned. Note that None will return all
+            outputs
+  **kwargs : dict
+             The keyword arguments which are passed to the functions in the `control` module for
+             which this wrapper is made
+
+  Returns:
+  --------
+  ts, datamat, iins, iouts : array, array, array, array
+                             ts: The time steps used
+                             datamat: The output values in a structured array
+                             iins: the indices of the inputs used
+                             iouts: the indices of the outputs used
   """
   class TimeResponseTypeError(Exception):
     pass
