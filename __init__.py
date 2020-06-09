@@ -651,40 +651,40 @@ def print_overview(Hsys, file=None, verbose=False):
   print("Tag: {:s}".format(Hsys.tag), file=file)
   print("Is plant: {}".format(Hsys.is_plant), file=file)
   if Hsys.is_plant:
-    print("Operating point values:")
-    print("  wind speed: {:0.1f} [m/s]".format(Hsys.wind_speed))
-    print("  rotor azimuth: {:0.1f} [deg]".format(np.rad2deg(Hsys.azimuth)))
-    print("  rotor speed: {:0.3f} [Hz]".format(w2f(Hsys.ref_rotor_speed)))
-    print("               {:0.1f} [rpm]".format(w2n(Hsys.ref_rotor_speed)))
-    print("  blade pitch: {:0.2f} [deg]".format(np.rad2deg(Hsys.ref_pitch)))
-    print("  generator speed: {:0.1f} [Hz]".format(w2f(Hsys.ref_generator_speed)))
-    print("                   {:0.1f} [rpm]".format(w2n(Hsys.ref_generator_speed)))
-    print("  generator torque: {:0.1f} [kNm]".format(Hsys.ref_generator_torque*1e-3))
+    print("Operating point values:", file=file)
+    print("  wind speed: {:0.1f} [m/s]".format(Hsys.wind_speed), file=file)
+    print("  rotor azimuth: {:0.1f} [deg]".format(np.rad2deg(Hsys.azimuth)), file=file)
+    print("  rotor speed: {:0.3f} [Hz]".format(w2f(Hsys.ref_rotor_speed)), file=file)
+    print("               {:0.1f} [rpm]".format(w2n(Hsys.ref_rotor_speed)), file=file)
+    print("  blade pitch: {:0.2f} [deg]".format(np.rad2deg(Hsys.ref_pitch)), file=file)
+    print("  generator speed: {:0.1f} [Hz]".format(w2f(Hsys.ref_generator_speed)), file=file)
+    print("                   {:0.1f} [rpm]".format(w2n(Hsys.ref_generator_speed)), file=file)
+    print("  generator torque: {:0.1f} [kNm]".format(Hsys.ref_generator_torque*1e-3), file=file)
   print("Is SISO: {}".format(Hsys.issiso()), file=file)
   print("Is discrete time: {}".format(Hsys.isdtime()), file=file)
   print("Is continuous time: {}".format(Hsys.isctime()), file=file)
   print("Number of states: {:2d}".format(Hsys.states), file=file)
 
   if verbose:
-    print("--------------------", file=file)
+    print("  << state names (if existing) >>", file=file)
     for istate, state in enumerate(Hsys.statenames):
       print("  [{:d}] {:s}".format(istate, state), file=file)
-    print("")
+    print("\n", file=file)
 
   print("Number of inputs: {:2d}".format(Hsys.inputs), file=file)
 
   if verbose:
-    print("--------------------", file=file)
+    print("  << input names >>", file=file)
     for iin, input_ in enumerate(Hsys.inputnames):
       print("  [{:d}] {:s}".format(iin, input_), file=file)
-    print("")
+    print("\n", file=file)
 
   print("Number of outputs: {:2d}".format(Hsys.outputs), file=file)
   if verbose:
-    print("---------------------", file=file)
+    print("  << output names >>", file=file)
     for iout, output in enumerate(Hsys.outputnames):
       print("  [{:d}] {:s}".format(iout, output), file=file)
-    print("")
+    print("\n", file=file)
 
 
 def _linear_interpolation(ys, xs, ythres):
@@ -1145,12 +1145,39 @@ def scale_plant_controls(Hplant, order=2, scale_to=1., tag_sufx="_norm", prune=T
   return Hplant_n, input_sfs
 
 
-def modify_plant(Hplant, what2mod, replace=None, rename=None, reorder=None, remove=None):
+def modify_plant(plant, what2mod, replace=None, rename=None, reorder=None, remove=None, keep=None):
   """
-  modify part of the plant
+  modify part of the plant in the broadest sense. The inputs/outputs/states can be renamed,
+  removed or reordered or replaced
+
+  Arguments:
+  ----------
+  plant : StateSpace object
+          The state-space plant object to be modified.
+  what2mod : ['states' | 'inputs' | 'outputs' ]
+             what part of the plant to modify
+  replace : [ array-like | None ], default=None
+            The substrings to be replaced. can be used to quickly replace a certain substring with
+            another substring across all strings in states/inputs/outputs
+  rename : [ array-like | None ], default=None
+           The elements in rename are tuples in which the first is the 'to' and the second element
+           is 'from'
+  reorder : [ None | array-like of str], default=None
+            The order in which the states/inputs/outputs must be given. The size must be equal to
+            the number of elements present
+  remove : [ None | array-like of str ], default=None
+           The list of strings to remove from the states/inputs/outputs
+  keep : [ None | array-like of str ], default=None
+         Which to states/inputs/outputs to keep. Note that either keep or remove may be not-None
+
+  Returns:
+  ---------
+  * nothing *, the plant is modified in place
   """
-  if not hasattr(Hplant, what2mod):
+  if not hasattr(plant, what2mod):
     raise ValueError("The plant does not have an attribute `{}`".format(what2mod))
+
+  _check_xor_inputs(remove, keep, raise_exception=True)
 
   dimdict = dict.fromkeys(['A', 'B', 'C', 'D'], [])
   if what2mod == 'states':
@@ -1168,62 +1195,69 @@ def modify_plant(Hplant, what2mod, replace=None, rename=None, reorder=None, remo
     dimdict['D'] = [0]
 
   # 1: removing states
-  remove = aux.listify(remove)
-  irem = []
-  for remelm in aux.listify(remove):
-    if isinstance(remelm, str):
-      irem_ = aux.find_elm_containing_substrs(remelm, getattr(Hplant, nameattr), strmatch='all')
-      if len(irem_) > 0:
-        irem += aux.listify(irem_)
-    else:
-      irem.append(remelm)
+  if remove is not None:
+    list_ = aux.listify(remove)
+  else:
+    list_ = aux.listify(keep)
 
-  ikeep = np.setdiff1d(np.r_[:getattr(Hplant, what2mod)], irem)
+  ifnd = []
+  for listelm in aux.listify(list_):
+    if isinstance(listelm, str):
+      ifnd_ = aux.find_elm_containing_substrs(listelm, getattr(plant, nameattr), strmatch='all')
+      if len(ifnd_) > 0:
+        ifnd += aux.listify(ifnd_)
+    else:
+      ifnd.append(listelm)
+
+  if remove is not None:
+    ikeep = np.setdiff1d(np.r_[:getattr(plant, what2mod)], ifnd)
+  else:
+    ikeep = aux.arrayify(ifnd)
 
   # update states/inputs/outputs
-  setattr(Hplant, what2mod, ikeep.size)
+  setattr(plant, what2mod, ikeep.size)
   # update names
-  setattr(Hplant, nameattr, getattr(Hplant, nameattr)[ikeep])
+  setattr(plant, nameattr, getattr(plant, nameattr)[ikeep])
 
   # update matrices
   for matid in dimdict.keys():
-    mdata = getattr(Hplant, matid)
+    mdata = getattr(plant, matid)
     if 0 in dimdict[matid]:
       mdata = mdata[ikeep, :]
     if 1 in dimdict[matid]:
       mdata = mdata[:, ikeep]
 
-    # set modified matrix to Hplant
-    setattr(Hplant, matid, mdata)
+    # set modified matrix to plant
+    setattr(plant, matid, mdata)
 
   # 2: replace and rename
-  setattr(Hplant, nameattr,
-          aux.arrayify(aux.modify_strings(getattr(Hplant, nameattr), globs=replace, specs=rename)))
+  setattr(plant, nameattr,
+          aux.arrayify(aux.modify_strings(getattr(plant, nameattr), globs=replace, specs=rename)))
 
   # 3: reorder
   if reorder is not None:
-    nof_elms = getattr(Hplant, what2mod)
+    nof_elms = getattr(plant, what2mod)
     if len(reorder) != nof_elms:
       raise ValueError("The number of elements in `reorder` ({:d}) is not matching the number of".
                        format(len(reorder)) + " outputs ({:d}".format(nof_elms))
 
     isort = np.ones((nof_elms), dtype=int)
     for ielm, str_ in enumerate(reorder):
-      isort[ielm] = aux.find_elm_containing_substrs(str_, getattr(Hplant, nameattr), nreq=1,
+      isort[ielm] = aux.find_elm_containing_substrs(str_, getattr(plant, nameattr), nreq=1,
                                                     raise_except=False, strmatch='all')
 
     # update matrices
     for matid in dimdict.keys():
-      mdata = getattr(Hplant, matid)
+      mdata = getattr(plant, matid)
       if 0 in dimdict[matid]:
         mdata = mdata[isort, :]
       if 1 in dimdict[matid]:
         mdata = mdata[:, isort]
 
-      # set modified matrix to Hplant
-      setattr(Hplant, matid, mdata)
+      # set modified matrix to plant
+      setattr(plant, matid, mdata)
 
-    setattr(Hplant, nameattr, getattr(Hplant, nameattr)[isort])
+    setattr(plant, nameattr, getattr(plant, nameattr)[isort])
 
 
 def set_plant_output_to_states(Hplant):
@@ -1487,41 +1521,39 @@ def _check_xor_inputs(in1, in2, raise_exception=False, issue_warning=True):
   return is_ok
 
 
-def split_model_inputs(Hplant, perts=None, conts=None, return_new_model=False):
+def split_plant(plant, dists=None, conts=None):
   """
-  split the model disturbances from the Plant block (made with make_block function)
+  split the generic plant model in G and Gd of which the latter Gd are the disturbances on the
+  output
   """
-  if not _check_xor_inputs(perts, conts, raise_exception=False, issue_warning=True):
-    return Hplant, np.array([], dtype=float)
+  if not _check_xor_inputs(dists, conts, raise_exception=False, issue_warning=True):
+    return plant, np.array([], dtype=float)
 
-  list_ = aux.listify(perts if conts is None else conts)
+  list_ = aux.listify(dists if conts is None else conts)
   ifnd = []
   for idx, elm in enumerate(list_):
-    ifnd_ = aux.find_elm_containing_substrs(elm, Hplant.inputnames, strmatch='all')
+    ifnd_ = aux.find_elm_containing_substrs(elm, plant.inputnames, strmatch='all')
     ifnd += aux.listify(ifnd_)
 
   ifnd = np.unique(aux.arrayify(ifnd))
 
   # if perturbations are not given -> deduce then from the controls (which are ifnd)
-  if perts is None:
-    ifnd = np.setdiff1d(np.r_[:Hplant.inputs], ifnd, assume_unique=True)
+  if dists is None:
+    idists = np.setdiff1d(np.r_[:plant.inputs], ifnd, assume_unique=True)
+    iconts = ifnd
+  else:
+    idists = ifnd
+    iconts = np.setdiff1d(np.r_[:plant.inputs], ifnd, assume_unique=True)
 
   # extract the perturbations into a P matrix and modify the plant
-  P = deepcopy(Hplant.B[:, ifnd])
-  pnames = deepcopy(Hplant.inputnames[ifnd])
+  # initialize the G and Gd 'plants'
+  G = deepcopy(plant)
+  Gd = deepcopy(plant)
 
-  if return_new_model:
-    Hplant_new = deepcopy(Hplant)
-  else:
-    Hplant_new = Hplant
+  modify_plant(G, 'inputs', remove=idists)
+  modify_plant(Gd, 'inputs', remove=iconts)
 
-  modify_plant(Hplant_new, 'inputs', remove=ifnd)
-
-  outs = (P, pnames)
-  if return_new_model:
-    outs = (*outs, Hplant_new)
-
-  return outs
+  return G, Gd
 
 
 def load_models(files, dirname='', states_to_ignore=[], vwinds_wanted=None, azis_wanted=None,
@@ -2528,9 +2560,9 @@ def pole_contributions(sys, plot=True, thres=5.):
   for ipole, iisort_crit in enumerate(isort_crit):
     # make row label (pole label)
     if plot:
-      rlabels.append("f={:0.0f} mHz, $\\zeta$={:0.3f}, cri={:.1g} - {:d}".
-                     format(1e3*freqs[iisort_crit], dampratios[iisort_crit],
-                            criticalities[iisort_crit], ipole))
+      rlabels.append("$\\sigma$={:g}, f={:g} Hz, $\\zeta$={:g} - {:d}".
+                     format(dcays[iisort_crit], freqs[iisort_crit], dampratios[iisort_crit],
+                            ipole))
 
     # calc contributions of physical states
     eigvec = np.abs(eigvecs_[:, iisort_crit])
@@ -2542,7 +2574,7 @@ def pole_contributions(sys, plot=True, thres=5.):
 
   outs = (eigvals_, eigvecs, contribution_matrix)
 
-  rlabels = [is_unstable*"<<< UNSTABLE >>> " + rlabel for is_unstable, rlabel in
+  rlabels = [is_unstable*"$\\mathbf{<UNSTABLE>}$" + rlabel for is_unstable, rlabel in
              zip(is_unstables, rlabels)]
   if plot:
     cmatperc = np.int_(100*contribution_matrix.copy() + 0.5)
@@ -2553,3 +2585,166 @@ def pole_contributions(sys, plot=True, thres=5.):
 
   return outs
 
+
+def scale_plant(G, max_cont_values=None, max_outp_values=None, Gd=None, max_dist_values=None,
+                inplace=False):
+  """
+  scale the G and Gd plants
+
+  Arguments:
+  ----------
+  G : StateSpace object
+      The state space object of the plant to be scaled (clean plant, excluding disturbances)
+  max_cont_values : dict
+                    If not None. This dict holds the maximum values to be used to scale the data
+                    as keys in a dict. The keys are - partial - strings which identify certain
+                    control inputs. All inputs which are not identified in the dict will
+                    remain unscaled
+  Gd : [ StateSpace object | None ], default=None
+       The state space object of the disturbances to the plant (only disturbances, no controls)
+  max_dist_values : [ dict | None ], default=None
+                    If not None, this is treated the same as *max_cont_values* but now for the
+                    disturbances and the Gd plant
+
+  Returns:
+  --------
+  * nothing is returned, the G and Gd are modified in place *
+  """
+  def _scaling_matrix(maxvaldict, names2search):
+    """
+    helper function that creates and returns a N-by-N scaling matrix
+    """
+    nof_names = names2search.size
+    if maxvaldict is None:
+      D_ = np.ones(nof_names, dtype=float)
+    else:
+      D_ = np.empty(nof_names, dtype=float)
+      for key, maxval in maxvaldict.items():
+        iconts = aux.find_elm_containing_substrs(key, names2search)
+        D_[iconts] = maxval
+
+    return np.diag(D_)
+
+  # check if the plant must be overwritten of newly created
+  if inplace:
+    Gnew = G
+    Gdnew = Gd
+  else:
+    Gnew = deepcopy(G)
+    Gdnew = deepcopy(Gd)
+
+  # -------- (Du) input control scaling matrix ------------------------
+  Dy = _scaling_matrix(max_outp_values, Gnew.outputnames)
+  Du = _scaling_matrix(max_cont_values, Gnew.inputnames)
+  Dd = _scaling_matrix(max_dist_values, Gdnew.inputnames)
+
+  # perform the scaling according to C*inv(sI - A)*B + D and Gscaled = inv(Dy)*G*Du
+  Gnew.C = np.linalg.pinv(Dy)@Gnew.C
+  Gnew.B = Gnew.B@Du
+  Gnew.D = Gnew.D@Du
+
+  # same for disturbances
+  Gdnew.C = np.linalg.pinv(Dy)@Gdnew.C
+  Gdnew.B = Gdnew.B@Dd
+  Gdnew.D = Gdnew.D@Dd
+
+  Gnew.scaling = dict(Du=Du, Dy=Dy)
+  Gdnew.scaling = dict(Du=Du, Dd=Dd)
+
+  if not inplace:
+    return Gnew, Gdnew
+
+
+def clean_plant_numerics(G, thresval, threstype="rel2max_rowcol", inplace=True):
+  """
+  clean the plant numerics by removing low values from the A, B, C and D matrices
+  """
+  def _threshold_ss_matrices(ss, thres, axis):
+    """
+    threshold all 4 matrices
+    """
+    if axis == 'none':
+      Amax = thres
+      Bmax = thres
+      Cmax = thres
+      Dmax = thres
+    else:
+      Amax = ss.A.max(axis=axis)*thres
+      Bmax = ss.B.max(axis=axis)*thres
+      Cmax = ss.C.max(axis=axis)*thres
+      Dmax = ss.D.max(axis=axis)*thres
+
+    ss.A[np.abs(ss.A) < Amax] = 0.
+    ss.B[np.abs(ss.B) < Bmax] = 0.
+    ss.C[np.abs(ss.C) < Cmax] = 0.
+    ss.D[np.abs(ss.D) < Dmax] = 0.
+
+  if not inplace:
+    G0 = deepcopy(G)
+  else:
+    G0 = G
+
+  if threstype == "abs":
+    _threshold_ss_matrices(G0, thresval, 'none')
+  elif threstype == "rel2max":
+    _threshold_ss_matrices(G0, thresval, None)
+  elif threstype == "rel2max_row":
+    _threshold_ss_matrices(G0, thresval, 1)
+  elif threstype == "rel2max_col":
+    _threshold_ss_matrices(G0, thresval, 0)
+  elif threstype == "rel2max_rowcol":
+    _threshold_ss_matrices(G0, 1., 1)
+    _threshold_ss_matrices(G0, thresval, 0)
+
+  if not inplace:
+    return G0
+
+
+def remove_useless_states(G, inplace=True):
+  """
+  remove the useless states
+  """
+  if not inplace:
+    G0 = deepcopy(G)
+  else:
+    G0 = G
+
+  # find useless rows and columns in A
+  Acolsum = np.array(G.A).sum(axis=0)
+  Arowsum = np.array(G.A).sum(axis=1)
+  iremAcol = np.argwhere(np.isclose(0., Acolsum)).reshape(-1)
+  iremArow = np.argwhere(np.isclose(0., Arowsum)).reshape(-1)
+
+  # find useless rows in B
+  Browsum = np.array(G.B).sum(axis=1)
+  iremBrow = np.argwhere(np.isclose(0., Browsum)).reshape(-1)
+
+  # find useless columns in C
+  Ccolsum = np.array(G.C).sum(axis=0)
+  iremCcol = np.argwhere(np.isclose(0., Ccolsum)).reshape(-1)
+
+  # combine (intersect) columsn of A and C and rows of A and B
+  iremcol = np.intersect1d(iremAcol, iremCcol)
+  iremrow = np.intersect1d(iremArow, iremBrow)
+
+  # total states to remove is the union of rows and columns to remove
+  irem = np.union1d(iremcol, iremrow)
+
+  # convert this to the states to keep
+  ikeep = np.setdiff1d(np.r_[:G.states], irem)
+
+  # overwrite the matrices A, B and C
+  G0.A = G0.A[ikeep, :]
+  G0.A = G0.A[:, ikeep]
+
+  G0.B = G0.B[ikeep, :]
+
+  G0.C = G0.C[:, ikeep]
+
+  # overwrite the state count and the names to keep
+  G0.states = ikeep.size
+  G0.statenames = G0.statenames[ikeep]
+
+  # output in case not *inplace*
+  if not inplace:
+    return G0
