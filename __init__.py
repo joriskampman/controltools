@@ -139,14 +139,18 @@ class RootLocus(object):
     plot or update the selected points
     """
     # get data for all rl's for this K value
-    dcays_arr, worfs_arr = split_s_plane_coords(self.rootsarr, self)
+    nof_poles = self.rootsarr.shape[1]
+    # find which pole was clicked
+
+    dcays_arr, worfs_arr = split_s_plane_coords(self.rootsarr, self.Hz)
     K = self.Ks[self.iselect]
     sigmas_this_K = dcays_arr[self.iselect, :]
     worfs_this_K = worfs_arr[self.iselect, :]
 
+    isort_sigmas_this_K = np.argsort(dcays_arr[self.iselect, :])[-1::-1]
     # start the new title string
     titlestr = "<< Closed-loop is "
-    if np.alltrue(sigmas_this_K < 0.):
+    if np.alltrue(sigmas_this_K <= 0.):
       titlestr += r"$\mathbf{STABLE}$"
       titlecolor = 'k'
     else:
@@ -156,8 +160,7 @@ class RootLocus(object):
     titlestr += "Gain (K) = {:0.1e}".format(K)
 
     # loop all root-locus plots
-    for ipole in range(dcays_arr.shape[1]):
-
+    for ipole in range(nof_poles):
       # get the numbers
       sigma = sigmas_this_K[ipole]
       worf = worfs_this_K[ipole]
@@ -170,16 +173,22 @@ class RootLocus(object):
       # derive zeta
       zeta = np.cos(np.arctan(worf/-sigma))
 
-      # append to title string
-      if self.Hz:
-        worf_str_part = "$f_d$ = {:0.4f} [Hz]".format(worf)
+      print(dcays_arr[self.iselect, isort_sigmas_this_K[ipole]])
+      if dcays_arr[self.iselect, isort_sigmas_this_K[ipole]] > 0.:
+        self.clarts[ipole].set_visible(True)
+        # append to title string
+        if self.Hz:
+          worf_str_part = "$f_d$ = {:0.4f} [Hz]".format(worf)
+        else:
+          worf_str_part = "$\\omega_d$ = {:0.4f} [rad/s]".format(worf)
+        titlestr += ("\n({:d}) $\\zeta$ = {:0.2f}, $\\sigma$ =  {:0.2f}, {:s}".
+                     format(ipole, zeta, sigma, worf_str_part))
       else:
-        worf_str_part = "$\\omega_d$ = {:0.4f} [rad/s]".format(worf)
-      titlestr += ("\n({:d}) $\\zeta$ = {:0.2f}, $\\sigma$ =  {:0.2f}, {:s}".
-                   format(ipole, zeta, sigma, worf_str_part))
+        self.clarts[ipole].set_visible(False)
 
+    print(titlestr)
     self.ax.set_title(titlestr, color=titlecolor, fontsize=8)
-    self.fig.tight_layout()
+    # self.fig.tight_layout()
     plt.draw()
     plt.pause(1e-6)
 
@@ -273,7 +282,6 @@ class RootLocus(object):
       # calculate the damping ratio (zeta)
       zeta = np.cos(disp_theta)
       txt = r"$\zeta$ = {:0.2f}".format(zeta)
-      # txt = "{:0.2f}".format(zeta)
 
       trans_angle = (180. +
                      ax.transData.transform_angles(np.array((np.rad2deg(np.pi - disp_theta),)),
@@ -425,12 +433,6 @@ class RootLocus(object):
     xlims = aux.arrayify(aux.bracket(dcays_arr[:, self.inotinfs]))
     ylims = aux.arrayify(aux.bracket(worfs_arr[:, self.inotinfs]))
 
-    # dists = np.abs(np.diff(self.rootsarr, axis=0))
-    # cdists = np.cumsum(dists, axis=0)
-    # cdistsn = cdists/cdists[-1, :]
-    # cdistsn_ = np.vstack((np.zeros((1, nof_poles), dtype=np.float_), cdistsn))
-    # sizearr = aux.data_scaling(cdistsn_, self.min_markersize, self.max_markersize, func='linear')
-
     self.fig = plt.figure(aux.figname("root-locus"))
     self.ax = self.fig.add_subplot(111)
     self.ax.grid(True)
@@ -446,13 +448,8 @@ class RootLocus(object):
       is_valid_y = (worfs >= ylims[0])*(worfs <= ylims[1])
       is_valid = is_valid_x*is_valid_y
 
-      # colvec = aux.color_vector(self.nof_K, colors[iroot, :], os=0.35)
-      # cmap = ListedColormap(colvec, name="root_locus_p{:d}".format(iroot))
       self.ax.plot(dcays[is_valid], worfs[is_valid], '-', color=colors[iroot, :], linewidth=2,
                    picker=True, label="pole {:d}".format(iroot), zorder=1)
-      # self.ax.scatter(dcays[is_valid], worfs[is_valid], s=sizearr[is_valid, iroot],
-      #                 c=sizearr[is_valid, iroot], cmap=cmap, marker='o', picker=True,
-      #                 label="pole {:d}".format(iroot), zorder=3)
 
       if plot_ref:
         self.ax.plot(dcays_arr[iref, iroot], worfs_arr[iref, iroot], '*', mew=2, mfc='none',
