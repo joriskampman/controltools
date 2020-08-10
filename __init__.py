@@ -2643,7 +2643,7 @@ def negate_inputs(sys, inputs):
   return sysi
 
 
-def pole_contributions(sys, plot=True, thres=5.):
+def pole_contributions(sys, plot=True, thres=1.):
   """
   determine the pole contributions for a plant
   """
@@ -2653,33 +2653,37 @@ def pole_contributions(sys, plot=True, thres=5.):
   # keep 1 pole per conjugate pair (Im > 0)
   eigvals_ = eigvals[tf_display]
   eigvecs_ = eigvecs[:, tf_display]
-  nof_poles_to_show = eigvals_.size
+  nof_poles_to_show_ = eigvals_.size
 
   # calculate criticalities (for ordering)
-  dcays = np.real(eigvals_)
+  dcays_ = np.real(eigvals_)
   # find which poles are unstable
-  is_unstables = (dcays > 0.).reshape(-1)
+  is_unstables_ = (dcays_ > 0.).reshape(-1)
 
-  freqs = w2f(np.imag(eigvals_))
-  dampratios = np.cos(np.arctan(f2w(freqs)/dcays))
-  criticalities = dcays*dampratios
-  criticalities[np.isnan(criticalities)] = 0.
-  isort_crit = np.argsort(criticalities)[-1::-1]
-  is_unstables = is_unstables[isort_crit]
+  freqs_ = w2f(np.imag(eigvals_))
+  dampratios_ = np.cos(np.arctan(f2w(freqs_)/dcays_))
+
+  # sorting based on criticalities
+  # criticalities_ = dcays_*dampratios_
+  # criticalities_[np.isnan(criticalities_)] = 0.
+  # isort_crit = np.argsort(criticalities_)[-1::-1]
+  isort_crit = np.r_[:nof_poles_to_show_]
+  # asdf
+  is_unstables__ = is_unstables_[isort_crit]
 
   # initialize labels for displaying matrix via improveshow
   if plot:
     clabels = [name + " - {:d}".format(ielm) for ielm, name in enumerate(sys.statenames)]
-    # clabels = [("<< UNSTABLE >> "*is_unstable + clabel) for is_unstable, clabel in
-    # zip(is_unstables, clabels)]
+    # clabels = [("$\\mathbf{(!!!)}$"*is_unstable + clabel) for is_unstable, clabel in
+    #            zip(is_unstables__, clabels)]
     rlabels = []
 
-  contribution_matrix = np.zeros((nof_poles_to_show, sys.states), dtype=float)
+  contribution_matrix = np.zeros((nof_poles_to_show_, sys.states), dtype=float)
   for ipole, iisort_crit in enumerate(isort_crit):
     # make row label (pole label)
     if plot:
       rlabels.append("$\\sigma$={:g}, f={:g} Hz, $\\zeta$={:g} - {:d}".
-                     format(dcays[iisort_crit], freqs[iisort_crit], dampratios[iisort_crit],
+                     format(dcays_[iisort_crit], freqs_[iisort_crit], dampratios_[iisort_crit],
                             ipole))
 
     # calc contributions of physical states
@@ -2688,12 +2692,13 @@ def pole_contributions(sys, plot=True, thres=5.):
 
     isort_contrib = np.argsort(contribs, axis=0)[-1::-1]
     for iisort_contrib in isort_contrib:
-      contribution_matrix[iisort_crit, iisort_contrib] = contribs[iisort_contrib]
+      # contribution_matrix[iisort_crit, iisort_contrib] = contribs[iisort_contrib]
+      contribution_matrix[ipole, iisort_contrib] = contribs[iisort_contrib]
 
   outs = (eigvals_, eigvecs, contribution_matrix)
 
   rlabels = [is_unstable*"$\\mathbf{<UNSTABLE>}$" + rlabel for is_unstable, rlabel in
-             zip(is_unstables, rlabels)]
+             zip(is_unstables__, rlabels)]
   if plot:
     cmatperc = np.int_(100*contribution_matrix.copy() + 0.5)
     _, ax = aux.improvedshow(cmatperc, cmap='Reds', fmt="{:2d}", show_values=True, clabels=clabels,
@@ -2701,7 +2706,8 @@ def pole_contributions(sys, plot=True, thres=5.):
                              invalid=[-np.inf, thres], title="Pole contributions", aspect='auto')
     outs = (*outs, ax)
 
-  return outs
+  if not plot:
+    return outs
 
 
 def scale_plant(G, max_cont_values=None, max_outp_values=None, Gd=None, max_dist_values=None,
