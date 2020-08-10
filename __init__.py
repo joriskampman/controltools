@@ -571,6 +571,9 @@ def plot_state_space_matrices(ss, display_type='compressed', show_values=True, z
   div_cmap = 'bwr'
   bin_cmap = 'traffic_light'
 
+  # add labels if they don't exist
+  add_generic_labels(ss, inplace=True, force=False)
+
   matdict = dict()
   matdict['A'] = dict(show_col_labels=split_plots,
                       show_row_labels=True,
@@ -642,9 +645,12 @@ def plot_state_space_matrices(ss, display_type='compressed', show_values=True, z
     rlabels = mdict['show_row_labels']*mdict['rowlabels']
     clabels = mdict['show_col_labels']*mdict['collabels']
 
-    # print(rlabels)
-    # if len(rlabels) == 0:
-    #   asdf
+    print(rlabels)
+    if len(rlabels) == 0:
+      rlabels = ["{:d}".format(index) for index in np.r_[:matdata.shape[0]]]
+    if len(clabels) == 0:
+      clabels = ["{:d}".format(index) for index in np.r_[:matdata.shape[1]]]
+
     aux.improvedshow(matdata, ax=ax, fmt="{:.1g}", rlabels=rlabels, clabels=clabels, title=title,
                      invalid=0., **kwargs)
 
@@ -1179,7 +1185,8 @@ def scale_plant_controls(Hplant, order=2, scale_to=1., tag_sufx="_norm", prune=T
   return Hplant_n, input_sfs
 
 
-def modify_plant(plant, what2mod, replace=None, rename=None, reorder=None, remove=None, keep=None):
+def modify_plant(plant, what2mod, replace=None, rename=None, reorder=None, remove=None, keep=None,
+                 inplace=True):
   """
   modify part of the plant in the broadest sense. The inputs/outputs/states can be renamed,
   removed or reordered or replaced
@@ -1208,7 +1215,13 @@ def modify_plant(plant, what2mod, replace=None, rename=None, reorder=None, remov
   ---------
   * nothing *, the plant is modified in place
   """
-  if not hasattr(plant, what2mod):
+  # check if an output must be generated
+  if inplace:
+    plant_ = plant
+  else:
+    plant_ = deepcopy(plant)
+
+  if not hasattr(plant_, what2mod):
     raise ValueError("The plant does not have an attribute `{}`".format(what2mod))
 
   _check_xor_inputs(remove, keep, raise_exception=True)
@@ -1237,61 +1250,64 @@ def modify_plant(plant, what2mod, replace=None, rename=None, reorder=None, remov
   ifnd = []
   for listelm in aux.listify(list_):
     if isinstance(listelm, str):
-      ifnd_ = aux.find_elm_containing_substrs(listelm, getattr(plant, nameattr), strmatch='all')
+      ifnd_ = aux.find_elm_containing_substrs(listelm, getattr(plant_, nameattr), strmatch='all')
       if len(ifnd_) > 0:
         ifnd += aux.listify(ifnd_)
     else:
       ifnd.append(listelm)
 
   if remove is not None:
-    ikeep = np.setdiff1d(np.r_[:getattr(plant, what2mod)], ifnd)
+    ikeep = np.setdiff1d(np.r_[:getattr(plant_, what2mod)], ifnd)
   else:
     ikeep = aux.arrayify(ifnd)
 
   # update states/inputs/outputs
-  setattr(plant, what2mod, ikeep.size)
+  setattr(plant_, what2mod, ikeep.size)
   # update names
-  setattr(plant, nameattr, getattr(plant, nameattr)[ikeep])
+  setattr(plant_, nameattr, getattr(plant_, nameattr)[ikeep])
 
   # update matrices
   for matid in dimdict.keys():
-    mdata = getattr(plant, matid)
+    mdata = getattr(plant_, matid)
     if 0 in dimdict[matid]:
       mdata = mdata[ikeep, :]
     if 1 in dimdict[matid]:
       mdata = mdata[:, ikeep]
 
-    # set modified matrix to plant
-    setattr(plant, matid, mdata)
+    # set modified matrix to plant_
+    setattr(plant_, matid, mdata)
 
   # 2: replace and rename
-  setattr(plant, nameattr,
-          aux.arrayify(aux.modify_strings(getattr(plant, nameattr), globs=replace, specs=rename)))
+  setattr(plant_, nameattr,
+          aux.arrayify(aux.modify_strings(getattr(plant_, nameattr), globs=replace, specs=rename)))
 
   # 3: reorder
   if reorder is not None:
-    nof_elms = getattr(plant, what2mod)
+    nof_elms = getattr(plant_, what2mod)
     if len(reorder) != nof_elms:
       raise ValueError("The number of elements in `reorder` ({:d}) is not matching the number of".
                        format(len(reorder)) + " outputs ({:d}".format(nof_elms))
 
     isort = np.ones((nof_elms), dtype=int)
     for ielm, str_ in enumerate(reorder):
-      isort[ielm] = aux.find_elm_containing_substrs(str_, getattr(plant, nameattr), nreq=1,
+      isort[ielm] = aux.find_elm_containing_substrs(str_, getattr(plant_, nameattr), nreq=1,
                                                     raise_except=False, strmatch='all')
 
     # update matrices
     for matid in dimdict.keys():
-      mdata = getattr(plant, matid)
+      mdata = getattr(plant_, matid)
       if 0 in dimdict[matid]:
         mdata = mdata[isort, :]
       if 1 in dimdict[matid]:
         mdata = mdata[:, isort]
 
-      # set modified matrix to plant
-      setattr(plant, matid, mdata)
+      # set modified matrix to plant_
+      setattr(plant_, matid, mdata)
 
-    setattr(plant, nameattr, getattr(plant, nameattr)[isort])
+    setattr(plant_, nameattr, getattr(plant_, nameattr)[isort])
+
+  if not inplace:
+    return plant_
 
 
 def set_plant_output_to_states(Hplant):
@@ -1824,7 +1840,7 @@ def plot_bode(Hplant, input_=0, output=0, omega_limits=[1e-3, 1e2], omega_num=1e
 
 def plot_single_plant_bodes(Hplant, inputs=None, outputs=None, omega_limits=[1e-3, 1e2],
                             omega_num=1e5, dB=True, Hz=True, show_margins=False,
-                            show_nyquist=False, fig=None, axs=None, colors=None,
+                            show_nyquist=False, axs=None, colors=None,
                             show_legend=True, figname=None, suptitle="Bode plots"):
   """
   generate all bode plots for a plant
@@ -1848,12 +1864,14 @@ def plot_single_plant_bodes(Hplant, inputs=None, outputs=None, omega_limits=[1e-
   for iin in inputs:
     for iout in outputs:
       iplot += 1
-      (fig, axs) = plot_bode(Hplant, iin, iout, omega_limits=omega_limits,
-                             omega_num=np.int_(omega_num), dB=dB, Hz=Hz, show_margins=show_margins,
-                             show_nyquist=show_nyquist, fig=fig, axs=axs,
-                             color=colors[iplot], linestyle='-', show_legend=show_legend,
-                             figname=figname, suptitle=suptitle)
+      axs = plot_bode(Hplant, input_=iin, output=iout, omega_limits=omega_limits,
+                      omega_num=np.int_(omega_num), dB=dB, Hz=Hz, show_margins=show_margins,
+                      show_nyquist=show_nyquist, axs=axs,
+                      color=colors[iplot], linestyle='-', show_legend=show_legend,
+                      figname=figname)
 
+  fig = axs[0].figure
+  fig.suptitle(suptitle, fontweight='bold', fontsize=12)
   return fig, axs
 
 
