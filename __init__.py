@@ -2775,13 +2775,34 @@ def scale_plant(G, max_cont_values=None, max_outp_values=None, Gd=None, max_dist
   Gnew.scaling = dict(Du=Du, Dy=Dy)
   Gdnew.scaling = dict(Du=Du, Dd=Dd)
 
-  if not inplace:
-    return Gnew, Gdnew
+  return Gnew, Gdnew
 
 
-def clean_plant_numerics(G, thresval, threstype="rel2max_rowcol", inplace=True):
+def clean_plant_numerics(plant, thresval, threstype="rel2max_rowcol", inplace=True):
   """
   clean the plant numerics by removing low values from the A, B, C and D matrices
+
+  Arguments:
+  ----------
+  plant : StateSpace object
+          The plant in state-space extended format
+  thresval : numeric
+             The threshold value to use
+  threstype : ['abs' | 'rel2max' | 'rel2max_row' | 'rel2max_col' | 'rel2max_rowcol'],
+          default=rel2max_col
+              The type of thresholding:
+              abs - absolute value
+              rel2max - relative to the maximum per ss matrix
+              rel2max_col - relative to the maximum per column (default)
+              rel2max_row - relative to the maximum per row
+              rel2max_rowcol - relative the maximum per row and column
+  inplace : bool, default=True
+            whether the plant must be overwritten or not
+
+  Returns:
+  --------
+  plant : StateSpace object
+          changed or new plant, depending on *inplace* parameter
   """
   def _threshold_ss_matrices(ss, thres, axis):
     """
@@ -2803,25 +2824,26 @@ def clean_plant_numerics(G, thresval, threstype="rel2max_rowcol", inplace=True):
     ss.C[np.abs(ss.C) < Cmax] = 0.
     ss.D[np.abs(ss.D) < Dmax] = 0.
 
+  # handle inplace keyword
   if not inplace:
-    G0 = deepcopy(G)
+    plant_ = deepcopy(plant)
   else:
-    G0 = G
+    plant_ = plant
 
+  # switch based on type
   if threstype == "abs":
-    _threshold_ss_matrices(G0, thresval, 'none')
+    _threshold_ss_matrices(plant_, thresval, 'none')
   elif threstype == "rel2max":
-    _threshold_ss_matrices(G0, thresval, None)
+    _threshold_ss_matrices(plant_, thresval, None)
   elif threstype == "rel2max_row":
-    _threshold_ss_matrices(G0, thresval, 1)
+    _threshold_ss_matrices(plant_, thresval, 1)
   elif threstype == "rel2max_col":
-    _threshold_ss_matrices(G0, thresval, 0)
+    _threshold_ss_matrices(plant_, thresval, 0)
   elif threstype == "rel2max_rowcol":
-    _threshold_ss_matrices(G0, 1., 1)
-    _threshold_ss_matrices(G0, thresval, 0)
+    _threshold_ss_matrices(plant_, 1., 1)
+    _threshold_ss_matrices(plant_, thresval, 0)
 
-  if not inplace:
-    return G0
+  return plant_
 
 
 def remove_useless_states(G, inplace=True):
