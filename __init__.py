@@ -2354,6 +2354,61 @@ def pidpar(Kp, **kwargs):
   return Hpid
 
 
+def minreal(plant, tol=None, inplace=True, verbose=True):
+  """
+  wrapper around control.minreal which keeps properties of the BlockStateSpace model like
+  inputnames and outputnames
+  """
+  if inplace:
+    plant_ = plant
+  else:
+    plant_ = deepcopy(plant)
+
+  plantm = cm.minreal(plant_, tol=tol, verbose=verbose)
+
+  plant_.A = deepcopy(plantm.A)
+  plant_.B = deepcopy(plantm.B)
+  plant_.C = deepcopy(plantm.C)
+  plant_.D = deepcopy(plantm.D)
+  plant_.states = deepcopy(plantm.states)
+
+  add_generic_labels(plant_, force='states', inplace=True)
+
+  return plant_
+
+
+def pzmap(plant, ax=None, do_sisos=True, do_mimo=True, show_legend=True, title=None):
+  """
+  wrapper around the control.pzmap function which plots the poles and zeros
+  """
+  if ax is None:
+    fig, ax = plt.subplots(1, 1, num=aux.figname("pole/zero analysis"))
+
+  if title is not None:
+    ax.set_title(title, fontsize=10, fontweight='bold')
+  # plot all poles and zeros for all SISO's and for the minreal mimo
+  nof_plots = plant.inputs*plant.outputs
+  colors = aux.jetmod(nof_plots, 'vector', bright=True)
+  for iin in range(plant.inputs):
+    for iout in range(plant.outputs):
+      label = labelmaker(plant, input_=iin, max_char=80, prepend_tag=False)
+      iplot = iin*plant.outputs + iout
+      color = colors[iplot, :]
+      ps, zs = cm.pzmap(make_siso(plant, iin, iout), Plot=False)
+      ax.plot(np.real(ps), np.imag(ps), 'x', color=color, label=label, alpha=0.5)
+      ax.plot(np.real(zs), np.imag(zs), 'o', color=color, mfc='none', alpha=0.5)
+  if do_mimo:
+    Ps, Zs = cm.pzmap(plant, Plot=False)
+    ax.plot(np.real(Ps), np.imag(Ps), 'kx', mew=2, markersize=10, zorder=-1)
+    ax.plot(np.real(Zs), np.imag(Zs), 'ko', mfc='none', mew=2, markersize=10, zorder=-1)
+
+  if show_legend:
+    ax.legend(fontsize=6)
+  plt.show(block=False)
+
+  return ax
+
+
 def pid(Kp, N=100, form='ideal', force_statespace=True, dt=0., **kwargs):
   """
   PID controller according to the ideal scheme:
