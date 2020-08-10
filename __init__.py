@@ -2487,7 +2487,7 @@ def split_s_plane_coords(s_coords, Hz=False):
   return aux.split_complex(s_coords, sfx=1, sfy=sfy)
 
 
-def time_response(response_type, sys, inputs=None, outputs=None, **kwargs):
+def time_response(response_type, sys, inputs=None, outputs=None, squeeze=True, **kwargs):
   """
   wrapper around the impulse_response and step_response functions in the control module
 
@@ -2503,17 +2503,19 @@ def time_response(response_type, sys, inputs=None, outputs=None, **kwargs):
   outputs : [ None | int | str | array-like of str or int], default=None
             The outputs which have to be calculated and returned. Note that None will return all
             outputs
+  squeeze : bool, default=True
+            Whether to squeeze the outputs
   **kwargs : dict
              The keyword arguments which are passed to the functions in the `control` module for
              which this wrapper is made
 
   Returns:
   --------
-  ts, datamat, iins, iouts : array, array, array, array
-                             ts: The time steps used
-                             datamat: The output values in a structured array
-                             iins: the indices of the inputs used
-                             iouts: the indices of the outputs used
+  datamat, iins, iouts : array, array, array, array
+                         datamat: The output values in a structured array
+                         ts: The time steps used
+                         iins: the indices of the inputs used
+                         iouts: the indices of the outputs used
   """
   class TimeResponseTypeError(Exception):
     pass
@@ -2549,12 +2551,21 @@ def time_response(response_type, sys, inputs=None, outputs=None, **kwargs):
     if use_iokwargs:
       kwargs['input'] = np.int(iin)
     ts, ydata = func(sys, **kwargs)[:2]
+    if iouts.size == 1:
+      ydata = ydata.reshape(1, -1)
+    # make it into a 2D array
 
+    # initialize datamat
     if _iin == 0:
       datamat = np.empty((iins.size, iouts.size, ts.size), dtype=np.float)
+
+    # add data to datamat
     datamat[_iin, :, :] = ydata[iouts, :]
 
-  return ts, datamat, iins, iouts
+  if squeeze:
+    datamat = datamat.squeeze()
+
+  return datamat, ts, iins, iouts
 
 
 def labelmaker(sys, input_=None, output=None, max_char=np.inf, gluestr=" -> ", what2keep='begin',
