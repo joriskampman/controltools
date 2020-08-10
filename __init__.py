@@ -483,6 +483,43 @@ class RootLocus(object):
     plt.draw()
 
 
+def add_generic_labels(plant, inplace=True, force=False):
+  """
+  Add labels in case they do not exist
+
+  Arguments:
+  ----------
+  plant : StateSpace object
+          The plant for which the statenames/inputnames/outputnames are missing or empty
+  inplace : bool, default=True
+            Whether to return a new plant or overwrite the old plant
+  force : create generic labels even though there exists labels already
+
+  Returns:
+  mPlant : StateSpace object
+           The modified state space object
+  """
+  # handle inplace keyword argument
+  if not inplace:
+    plant_ = deepcopy(plant)
+  else:
+    plant_ = plant
+
+  if force is True:
+    force = 'all'
+
+  if not hasattr(plant_, 'statenames') or force in ('states', 'all'):
+    plant_.statenames = np.array(["state_{:d}".format(index) for index in np.r_[:plant_.states]])
+
+  if not hasattr(plant_, 'inputnames') or force in ('inputs', 'all'):
+    plant_.inputnames = np.array(["in_{:d}".format(index) for index in np.r_[:plant_.inputs]])
+
+  if not hasattr(plant_, 'outputnames') or force in ('outputs', 'all'):
+    plant_.outputnames = np.array(["out_{:d}".format(index) for index in np.r_[:plant_.outputs]])
+
+  return plant_
+
+
 def plot_state_space_matrices(ss, display_type='compressed', show_values=True, zero_marker=None,
                               show_names=True, split_plots=False, aspect='auto', cmap=None,
                               suptitle=None, maximize=True):
