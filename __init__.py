@@ -139,14 +139,18 @@ class RootLocus(object):
     plot or update the selected points
     """
     # get data for all rl's for this K value
-    dcays_arr, worfs_arr = split_s_plane_coords(self.rootsarr, self)
+    nof_poles = self.rootsarr.shape[1]
+    # find which pole was clicked
+
+    dcays_arr, worfs_arr = split_s_plane_coords(self.rootsarr, self.Hz)
     K = self.Ks[self.iselect]
     sigmas_this_K = dcays_arr[self.iselect, :]
     worfs_this_K = worfs_arr[self.iselect, :]
 
+    isort_sigmas_this_K = np.argsort(dcays_arr[self.iselect, :])[-1::-1]
     # start the new title string
     titlestr = "<< Closed-loop is "
-    if np.alltrue(sigmas_this_K < 0.):
+    if np.alltrue(sigmas_this_K <= 0.):
       titlestr += r"$\mathbf{STABLE}$"
       titlecolor = 'k'
     else:
@@ -156,8 +160,7 @@ class RootLocus(object):
     titlestr += "Gain (K) = {:0.1e}".format(K)
 
     # loop all root-locus plots
-    for ipole in range(dcays_arr.shape[1]):
-
+    for ipole in range(nof_poles):
       # get the numbers
       sigma = sigmas_this_K[ipole]
       worf = worfs_this_K[ipole]
@@ -170,16 +173,22 @@ class RootLocus(object):
       # derive zeta
       zeta = np.cos(np.arctan(worf/-sigma))
 
-      # append to title string
-      if self.Hz:
-        worf_str_part = "$f_d$ = {:0.4f} [Hz]".format(worf)
+      print(dcays_arr[self.iselect, isort_sigmas_this_K[ipole]])
+      if dcays_arr[self.iselect, isort_sigmas_this_K[ipole]] > 0.:
+        self.clarts[ipole].set_visible(True)
+        # append to title string
+        if self.Hz:
+          worf_str_part = "$f_d$ = {:0.4f} [Hz]".format(worf)
+        else:
+          worf_str_part = "$\\omega_d$ = {:0.4f} [rad/s]".format(worf)
+        titlestr += ("\n({:d}) $\\zeta$ = {:0.2f}, $\\sigma$ =  {:0.2f}, {:s}".
+                     format(ipole, zeta, sigma, worf_str_part))
       else:
-        worf_str_part = "$\\omega_d$ = {:0.4f} [rad/s]".format(worf)
-      titlestr += ("\n({:d}) $\\zeta$ = {:0.2f}, $\\sigma$ =  {:0.2f}, {:s}".
-                   format(ipole, zeta, sigma, worf_str_part))
+        self.clarts[ipole].set_visible(False)
 
+    print(titlestr)
     self.ax.set_title(titlestr, color=titlecolor, fontsize=8)
-    self.fig.tight_layout()
+    # self.fig.tight_layout()
     plt.draw()
     plt.pause(1e-6)
 
@@ -273,7 +282,6 @@ class RootLocus(object):
       # calculate the damping ratio (zeta)
       zeta = np.cos(disp_theta)
       txt = r"$\zeta$ = {:0.2f}".format(zeta)
-      # txt = "{:0.2f}".format(zeta)
 
       trans_angle = (180. +
                      ax.transData.transform_angles(np.array((np.rad2deg(np.pi - disp_theta),)),
@@ -425,12 +433,6 @@ class RootLocus(object):
     xlims = aux.arrayify(aux.bracket(dcays_arr[:, self.inotinfs]))
     ylims = aux.arrayify(aux.bracket(worfs_arr[:, self.inotinfs]))
 
-    # dists = np.abs(np.diff(self.rootsarr, axis=0))
-    # cdists = np.cumsum(dists, axis=0)
-    # cdistsn = cdists/cdists[-1, :]
-    # cdistsn_ = np.vstack((np.zeros((1, nof_poles), dtype=np.float_), cdistsn))
-    # sizearr = aux.data_scaling(cdistsn_, self.min_markersize, self.max_markersize, func='linear')
-
     self.fig = plt.figure(aux.figname("root-locus"))
     self.ax = self.fig.add_subplot(111)
     self.ax.grid(True)
@@ -446,13 +448,8 @@ class RootLocus(object):
       is_valid_y = (worfs >= ylims[0])*(worfs <= ylims[1])
       is_valid = is_valid_x*is_valid_y
 
-      # colvec = aux.color_vector(self.nof_K, colors[iroot, :], os=0.35)
-      # cmap = ListedColormap(colvec, name="root_locus_p{:d}".format(iroot))
       self.ax.plot(dcays[is_valid], worfs[is_valid], '-', color=colors[iroot, :], linewidth=2,
                    picker=True, label="pole {:d}".format(iroot), zorder=1)
-      # self.ax.scatter(dcays[is_valid], worfs[is_valid], s=sizearr[is_valid, iroot],
-      #                 c=sizearr[is_valid, iroot], cmap=cmap, marker='o', picker=True,
-      #                 label="pole {:d}".format(iroot), zorder=3)
 
       if plot_ref:
         self.ax.plot(dcays_arr[iref, iroot], worfs_arr[iref, iroot], '*', mew=2, mfc='none',
@@ -484,6 +481,43 @@ class RootLocus(object):
 
     plt.show(block=False)
     plt.draw()
+
+
+def add_generic_labels(plant, inplace=True, force=False):
+  """
+  Add labels in case they do not exist
+
+  Arguments:
+  ----------
+  plant : StateSpace object
+          The plant for which the statenames/inputnames/outputnames are missing or empty
+  inplace : bool, default=True
+            Whether to return a new plant or overwrite the old plant
+  force : create generic labels even though there exists labels already
+
+  Returns:
+  mPlant : StateSpace object
+           The modified state space object
+  """
+  # handle inplace keyword argument
+  if not inplace:
+    plant_ = deepcopy(plant)
+  else:
+    plant_ = plant
+
+  if force is True:
+    force = 'all'
+
+  if not hasattr(plant_, 'statenames') or force in ('states', 'all'):
+    plant_.statenames = np.array(["state_{:d}".format(index) for index in np.r_[:plant_.states]])
+
+  if not hasattr(plant_, 'inputnames') or force in ('inputs', 'all'):
+    plant_.inputnames = np.array(["in_{:d}".format(index) for index in np.r_[:plant_.inputs]])
+
+  if not hasattr(plant_, 'outputnames') or force in ('outputs', 'all'):
+    plant_.outputnames = np.array(["out_{:d}".format(index) for index in np.r_[:plant_.outputs]])
+
+  return plant_
 
 
 def plot_state_space_matrices(ss, display_type='compressed', show_values=True, zero_marker=None,
@@ -537,21 +571,24 @@ def plot_state_space_matrices(ss, display_type='compressed', show_values=True, z
   div_cmap = 'bwr'
   bin_cmap = 'traffic_light'
 
+  # add labels if they don't exist
+  add_generic_labels(ss, inplace=True, force=False)
+
   matdict = dict()
-  matdict['A'] = dict(show_x_labels=split_plots,
-                      show_y_labels=True,
+  matdict['A'] = dict(show_col_labels=split_plots,
+                      show_row_labels=True,
                       rowlabels=_labelmaker("d({:s})/dt - {:2d}", ss.statenames),
                       collabels=_labelmaker("{:s} - {:2d}", ss.statenames))
-  matdict['B'] = dict(show_x_labels=split_plots,
-                      show_y_labels=split_plots,
+  matdict['B'] = dict(show_col_labels=split_plots,
+                      show_row_labels=split_plots,
                       rowlabels=_labelmaker("d({:s})/dt - {:2d}", ss.statenames),
                       collabels=_labelmaker("{:s} - {:2d}", ss.inputnames))
-  matdict['C'] = dict(show_x_labels=True,
-                      show_y_labels=True,
+  matdict['C'] = dict(show_col_labels=True,
+                      show_row_labels=True,
                       rowlabels=_labelmaker("{:s} - {:2d}", ss.outputnames),
                       collabels=_labelmaker("{:s} - {:2d}", ss.statenames))
-  matdict['D'] = dict(show_x_labels=True,
-                      show_y_labels=split_plots,
+  matdict['D'] = dict(show_col_labels=True,
+                      show_row_labels=split_plots,
                       rowlabels=_labelmaker("{:s} - {:2d}", ss.outputnames),
                       collabels=_labelmaker("{:s} - {:2d}", ss.inputnames))
 
@@ -605,41 +642,17 @@ def plot_state_space_matrices(ss, display_type='compressed', show_values=True, z
                        format(display_type))
 
     title = "{:s} [{:d} x {:d}]".format(key, *matdisp.shape)
-    aux.improvedshow(matdata, ax=ax, fmt="{:.1g}", rlabels=mdict['rowlabels'],
-                     clabels=mdict['collabels'], title=title, invalid=0., **kwargs)
-    # nr, nc = matdata.shape
+    rlabels = mdict['show_row_labels']*mdict['rowlabels']
+    clabels = mdict['show_col_labels']*mdict['collabels']
 
-    # ax.imshow(matdisp, **kwargs)
+    print(rlabels)
+    if len(rlabels) == 0:
+      rlabels = ["{:d}".format(index) for index in np.r_[:matdata.shape[0]]]
+    if len(clabels) == 0:
+      clabels = ["{:d}".format(index) for index in np.r_[:matdata.shape[1]]]
 
-    # # set title, grid and labels
-    # ax.set_title("{:s} [{:d} x {:d}]".format(key, nr, nc))
-    # ax.set_xticks(np.r_[:nc])
-    # ax.set_xticklabels(ax.get_xticks(), fontsize=7)
-    # if mdict['show_x_labels']:
-    #   ax.set_xticklabels(mdict['collabels'], fontsize=7, rotation=45, va='top', ha='right')
-    # ax.set_yticks(np.r_[:nr])
-    # ax.set_yticklabels(ax.get_yticks(), fontsize=7)
-    # if mdict['show_y_labels']:
-    #   ax.set_yticklabels(mdict['rowlabels'], fontsize=7)
-    # ax.tick_params(axis='both', which='major', length=0)
-
-    # # make minor ticks for dividing lines
-    # ax.set_xticks(np.r_[-0.5:nc+0.5:1], minor=True)
-    # ax.set_yticks(np.r_[-0.5:nr+0.5:1], minor=True)
-
-    # ax.grid(which='minor', linewidth=1)
-
-    # # show the values in the matrix
-    # if show_values:
-    #   for irow in range(nr):
-    #     for icol in range(nc):
-    #       if not np.isclose(matdata[irow, icol], 0.):
-    #         ax.text(icol, irow, "{:.1g}".format(matdata[irow, icol]), fontsize=6, ha='center',
-    #                 va='center', clip_on=True, bbox={'boxstyle':'square',
-    #                                                  'pad':0.0,
-    #                                                  'facecolor': 'none',
-    #                                                  'lw': 0.,
-    #                                                  'clip_on': True})
+    aux.improvedshow(matdata, ax=ax, fmt="{:.1g}", rlabels=rlabels, clabels=clabels, title=title,
+                     invalid=0., **kwargs)
 
     if zero_marker is not None:
       rcs = np.argwhere(np.isclose(0., matdata))
@@ -662,7 +675,7 @@ def plot_state_space_matrices(ss, display_type='compressed', show_values=True, z
     plt.pause(1e-6)
 
 
-def print_overview(Hsys, file=None):
+def print_overview(Hsys, file=None, verbose=False):
   """
   print an overview of the (sub)system/block
   """
@@ -677,23 +690,41 @@ def print_overview(Hsys, file=None):
 
   print("Tag: {:s}".format(Hsys.tag), file=file)
   print("Is plant: {}".format(Hsys.is_plant), file=file)
+  if Hsys.is_plant:
+    print("Operating point values:", file=file)
+    print("  wind speed: {:0.1f} [m/s]".format(Hsys.wind_speed), file=file)
+    print("  rotor azimuth: {:0.1f} [deg]".format(np.rad2deg(Hsys.azimuth)), file=file)
+    print("  rotor speed: {:0.3f} [Hz]".format(w2f(Hsys.ref_rotor_speed)), file=file)
+    print("               {:0.1f} [rpm]".format(w2n(Hsys.ref_rotor_speed)), file=file)
+    print("  blade pitch: {:0.2f} [deg]".format(np.rad2deg(Hsys.ref_pitch)), file=file)
+    print("  generator speed: {:0.1f} [Hz]".format(w2f(Hsys.ref_generator_speed)), file=file)
+    print("                   {:0.1f} [rpm]".format(w2n(Hsys.ref_generator_speed)), file=file)
+    print("  generator torque: {:0.1f} [kNm]".format(Hsys.ref_generator_torque*1e-3), file=file)
   print("Is SISO: {}".format(Hsys.issiso()), file=file)
   print("Is discrete time: {}".format(Hsys.isdtime()), file=file)
   print("Is continuous time: {}".format(Hsys.isctime()), file=file)
-  print("\nNumber of states: {:2d}".format(Hsys.states), file=file)
-  print("--------------------", file=file)
-  for istate, state in enumerate(Hsys.statenames):
-    print("  [{:d}] {:s}".format(istate, state), file=file)
+  print("Number of states: {:2d}".format(Hsys.states), file=file)
 
-  print("\nNumber of inputs: {:2d}".format(Hsys.inputs), file=file)
-  print("--------------------", file=file)
-  for iin, input_ in enumerate(Hsys.inputnames):
-    print("  [{:d}] {:s}".format(iin, input_), file=file)
+  if verbose:
+    print("  << state names (if existing) >>", file=file)
+    for istate, state in enumerate(Hsys.statenames):
+      print("  [{:d}] {:s}".format(istate, state), file=file)
+    print("\n", file=file)
 
-  print("\nNumber of outputs: {:2d}".format(Hsys.outputs), file=file)
-  print("---------------------", file=file)
-  for iout, output in enumerate(Hsys.outputnames):
-    print("  [{:d}] {:s}".format(iout, output), file=file)
+  print("Number of inputs: {:2d}".format(Hsys.inputs), file=file)
+
+  if verbose:
+    print("  << input names >>", file=file)
+    for iin, input_ in enumerate(Hsys.inputnames):
+      print("  [{:d}] {:s}".format(iin, input_), file=file)
+    print("\n", file=file)
+
+  print("Number of outputs: {:2d}".format(Hsys.outputs), file=file)
+  if verbose:
+    print("  << output names >>", file=file)
+    for iout, output in enumerate(Hsys.outputnames):
+      print("  [{:d}] {:s}".format(iout, output), file=file)
+    print("\n", file=file)
 
 
 def _linear_interpolation(ys, xs, ythres):
@@ -937,7 +968,8 @@ def prune_ios(Hsys, inputnames=None, outputnames=None, keep_or_prune='keep'):
   return iins, iouts
 
 
-def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, prune=False):
+def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, prune=False,
+                 reset_names=False):
   """
   build the system from blocks (make_block) and define the connections in a [(from, to)]
   array-like of tuples.
@@ -973,11 +1005,26 @@ def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, p
   prune : bool, default=False
           prune the internal connections made. These will not show up on the input(name)s and
           output(name)s lists
+  reset_names : bool, default=False
+                Flag to indicate if the input and output names must be reset, can only be applied
+                if `prune=True` and the resulting system is a SISO system
 
   Returns:
   --------
   out : state-space object
   """
+  def _handle_opens_shorts(opshs, blocks):
+    """
+    handles the input opens and shorts
+    """
+    if opshs == "all":
+      opshs = blocks
+    opshs = aux.listify(opshs)
+    opshs = [opsh.tag if isinstance(opsh, cm.StateSpace) else opsh for opsh in opshs]
+    opshs = aux.tuplify(opshs)
+
+    return opshs
+
   blocks = aux.listify(blocks)
 
   # next step: define interconnections based on input and outputnames
@@ -988,15 +1035,15 @@ def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, p
       block_out = blocks[iblock]
       block_in = blocks[iblock + 1]
       if not block_out.issiso():
-        raise ValueError("In case Qstrings=None, all blocks must be SISO." +
+        raise ValueError("In case Qstrings=None, all blocks must be SISO.",
                          "block with tag `{}` is not!".format(block_out.tag))
 
       Qstrings.append((block_out.outputnames[0], block_in.inputnames[0]))
 
   Qstrings_arr = np.array(Qstrings, dtype=[('outputs', object), ('inputs', object)])
 
-  opens = aux.tuplify(opens)
-  shorts = aux.tuplify(shorts)
+  shorts = _handle_opens_shorts(shorts, blocks)
+  opens = _handle_opens_shorts(opens, blocks)
 
   for iblock in range(len(blocks)):
     btag = blocks[iblock].tag
@@ -1062,10 +1109,17 @@ def build_system(blocks, Qstrings=None, tag="system", opens=None, shorts=None, p
       if hasattr(blocks[iplant], attr):
         setattr(Hsys, attr, getattr(blocks[iplant], attr))
 
+  else:
+    Hsys.is_plant = False
+
   if prune:
     # prune all that are connected (be carefull with this automated setting!)
     Qarr = aux.arrayify(Qstrings)
     prune_ios(Hsys, inputnames=Qarr[:, 1], outputnames=Qarr[:, 0], keep_or_prune='prune')
+
+    if reset_names and Hsys.issiso():
+      Hsys.inputnames = ["{:s}_in0".format(tag)]
+      Hsys.outputnames = ["{:s}_out0".format(tag)]
 
   return Hsys
 
@@ -1131,12 +1185,46 @@ def scale_plant_controls(Hplant, order=2, scale_to=1., tag_sufx="_norm", prune=T
   return Hplant_n, input_sfs
 
 
-def modify_plant(Hplant, what2mod, replace=None, rename=None, reorder=None, remove=None):
+def modify_plant(plant, what2mod, replace=None, rename=None, reorder=None, remove=None, keep=None,
+                 inplace=True):
   """
-  modify part of the plant
+  modify part of the plant in the broadest sense. The inputs/outputs/states can be renamed,
+  removed or reordered or replaced
+
+  Arguments:
+  ----------
+  plant : StateSpace object
+          The state-space plant object to be modified.
+  what2mod : ['states' | 'inputs' | 'outputs' ]
+             what part of the plant to modify
+  replace : [ array-like | None ], default=None
+            The substrings to be replaced. can be used to quickly replace a certain substring with
+            another substring across all strings in states/inputs/outputs
+  rename : [ array-like | None ], default=None
+           The elements in rename are tuples in which the first is the 'to' and the second element
+           is 'from'
+  reorder : [ None | array-like of str], default=None
+            The order in which the states/inputs/outputs must be given. The size must be equal to
+            the number of elements present
+  remove : [ None | array-like of str ], default=None
+           The list of strings to remove from the states/inputs/outputs
+  keep : [ None | array-like of str ], default=None
+         Which to states/inputs/outputs to keep. Note that either keep or remove may be not-None
+
+  Returns:
+  ---------
+  * nothing *, the plant is modified in place
   """
-  if not hasattr(Hplant, what2mod):
+  # check if an output must be generated
+  if inplace:
+    plant_ = plant
+  else:
+    plant_ = deepcopy(plant)
+
+  if not hasattr(plant_, what2mod):
     raise ValueError("The plant does not have an attribute `{}`".format(what2mod))
+
+  _check_xor_inputs(remove, keep, raise_exception=True)
 
   dimdict = dict.fromkeys(['A', 'B', 'C', 'D'], [])
   if what2mod == 'states':
@@ -1154,62 +1242,72 @@ def modify_plant(Hplant, what2mod, replace=None, rename=None, reorder=None, remo
     dimdict['D'] = [0]
 
   # 1: removing states
-  remove = aux.listify(remove)
-  irem = []
-  for remelm in aux.listify(remove):
-    if isinstance(remelm, str):
-      irem_ = aux.find_elm_containing_substrs(remelm, getattr(Hplant, nameattr), strmatch='all')
-      if len(irem_) > 0:
-        irem += aux.listify(irem_)
-    else:
-      irem.append(remelm)
+  if remove is not None:
+    list_ = aux.listify(remove)
+  else:
+    list_ = aux.listify(keep)
 
-  ikeep = np.setdiff1d(np.r_[:getattr(Hplant, what2mod)], irem)
+  ifnd = []
+  for listelm in aux.listify(list_):
+    if isinstance(listelm, str):
+      ifnd_ = aux.find_elm_containing_substrs(listelm, getattr(plant_, nameattr), strmatch='all')
+      if len(ifnd_) > 0:
+        ifnd += aux.listify(ifnd_)
+    else:
+      ifnd.append(listelm)
+
+  if remove is not None:
+    ikeep = np.setdiff1d(np.r_[:getattr(plant_, what2mod)], ifnd)
+  else:
+    ikeep = aux.arrayify(ifnd)
 
   # update states/inputs/outputs
-  setattr(Hplant, what2mod, ikeep.size)
+  setattr(plant_, what2mod, ikeep.size)
   # update names
-  setattr(Hplant, nameattr, getattr(Hplant, nameattr)[ikeep])
+  setattr(plant_, nameattr, getattr(plant_, nameattr)[ikeep])
 
   # update matrices
   for matid in dimdict.keys():
-    mdata = getattr(Hplant, matid)
+    mdata = getattr(plant_, matid)
     if 0 in dimdict[matid]:
       mdata = mdata[ikeep, :]
     if 1 in dimdict[matid]:
       mdata = mdata[:, ikeep]
 
-    # set modified matrix to Hplant
-    setattr(Hplant, matid, mdata)
+    # set modified matrix to plant_
+    setattr(plant_, matid, mdata)
 
   # 2: replace and rename
-  setattr(Hplant, nameattr,
-          aux.arrayify(aux.modify_strings(getattr(Hplant, nameattr), globs=replace, specs=rename)))
+  setattr(plant_, nameattr,
+          aux.arrayify(aux.modify_strings(getattr(plant_, nameattr), globs=replace, specs=rename)))
 
   # 3: reorder
   if reorder is not None:
-    nof_elms = getattr(Hplant, what2mod)
+    nof_elms = getattr(plant_, what2mod)
     if len(reorder) != nof_elms:
       raise ValueError("The number of elements in `reorder` ({:d}) is not matching the number of".
                        format(len(reorder)) + " outputs ({:d}".format(nof_elms))
 
     isort = np.ones((nof_elms), dtype=int)
     for ielm, str_ in enumerate(reorder):
-      isort[ielm] = aux.find_elm_containing_substrs(str_, getattr(Hplant, nameattr), nreq=1,
+      isort[ielm] = aux.find_elm_containing_substrs(str_, getattr(plant_, nameattr), nreq=1,
                                                     raise_except=False, strmatch='all')
 
     # update matrices
     for matid in dimdict.keys():
-      mdata = getattr(Hplant, matid)
+      mdata = getattr(plant_, matid)
       if 0 in dimdict[matid]:
         mdata = mdata[isort, :]
       if 1 in dimdict[matid]:
         mdata = mdata[:, isort]
 
-      # set modified matrix to Hplant
-      setattr(Hplant, matid, mdata)
+      # set modified matrix to plant_
+      setattr(plant_, matid, mdata)
 
-    setattr(Hplant, nameattr, getattr(Hplant, nameattr)[isort])
+    setattr(plant_, nameattr, getattr(plant_, nameattr)[isort])
+
+  if not inplace:
+    return plant_
 
 
 def set_plant_output_to_states(Hplant):
@@ -1221,6 +1319,28 @@ def set_plant_output_to_states(Hplant):
   Hplant.D = np.matrix(np.zeros((Hplant.states, Hplant.inputs), dtype=float))
   Hplant.outputs = Hplant.states
   Hplant.outputnames = Hplant.statenames.copy()
+
+
+def add_plant_inputs_to_outputs(sys, feed_inputs=None, prefix='[u]'):
+  """
+  add the inputs to the outputs if they do not exist yet
+  """
+  ifeeds, _ = _handle_iin_iout(feed_inputs, None, sys)
+
+  # check if they already exist
+  does_not_already_exist = [name not in sys.outputnames for name in sys.inputnames[ifeeds]]
+
+  ifeeds = ifeeds[does_not_already_exist]
+
+  nof_feeds = ifeeds.size
+  if nof_feeds > 0:
+    # add names to outputnames
+    feednames = [prefix + name for name in sys.inputnames[ifeeds]]
+    sys.outputnames = aux.arrayify(sys.outputnames.tolist() + feednames)
+    sys.C = np.vstack((sys.C, np.zeros((nof_feeds, sys.states), dtype=float)))
+    sys.D = np.vstack((sys.D, np.eye(nof_feeds, dtype=float)))
+
+    sys.outputs = sys.C.shape[0]
 
 
 def make_block(btype, tag, dt=0., inames=None, onames=None, force_statespace=True,
@@ -1366,7 +1486,7 @@ def make_block(btype, tag, dt=0., inames=None, onames=None, force_statespace=Tru
   return block
 
 
-def lqr_sub(Hplant, statmat=None, conmat=None, Q=None, R=None, return_subplant=False):
+def lqr_sub(Hplant, statmat=None, conmat=None, sfR2Q=1., return_subplant=False):
   """
   fill in
   """
@@ -1415,13 +1535,7 @@ def lqr_sub(Hplant, statmat=None, conmat=None, Q=None, R=None, return_subplant=F
   else:
     print("System is controllable")
 
-  # do the LQR
-  if Q is None:
-    Q = np.eye(nof_substates)
-  if R is None:
-    R = np.eye(nof_controls)
-  print(Q)
-  Ksub = cm.lqr(Hsub, Q, R)[0]
+  Ksub = cm.lqr(Hsub, Q, sfR2Q*R)[0]
 
   out = (Ksub, iinputs, istates, Cmat)
   if return_subplant:
@@ -1457,40 +1571,39 @@ def _check_xor_inputs(in1, in2, raise_exception=False, issue_warning=True):
   return is_ok
 
 
-def split_model_inputs(Hplant, perts=None, conts=None, return_new_model=False):
+def split_plant(plant, dists=None, conts=None):
   """
-  split the model disturbances from the Plant block (made with make_block function)
+  split the generic plant model in G and Gd of which the latter Gd are the disturbances on the
+  output
   """
-  if not _check_xor_inputs(perts, conts, raise_exception=False, issue_warning=True):
-    return Hplant, np.array([], dtype=float)
+  if not _check_xor_inputs(dists, conts, raise_exception=False, issue_warning=True):
+    return plant, np.array([], dtype=float)
 
-  list_ = perts if conts is None else conts
-  ifnd = np.empty(len(list_), dtype=int)
+  list_ = aux.listify(dists if conts is None else conts)
+  ifnd = []
   for idx, elm in enumerate(list_):
-    ifnd[idx] = aux.find_elm_containing_substrs(elm, Hplant.inputnames, nreq=1, strmatch='all')
+    ifnd_ = aux.find_elm_containing_substrs(elm, plant.inputnames, strmatch='all')
+    ifnd += aux.listify(ifnd_)
 
-  ifnd = aux.arrayify(ifnd)
+  ifnd = np.unique(aux.arrayify(ifnd))
 
   # if perturbations are not given -> deduce then from the controls (which are ifnd)
-  if perts is None:
-    ifnd = np.setdiff1d(np.r_[:Hplant.inputs], ifnd, assume_unique=True)
+  if dists is None:
+    idists = np.setdiff1d(np.r_[:plant.inputs], ifnd, assume_unique=True)
+    iconts = ifnd
+  else:
+    idists = ifnd
+    iconts = np.setdiff1d(np.r_[:plant.inputs], ifnd, assume_unique=True)
 
   # extract the perturbations into a P matrix and modify the plant
-  P = deepcopy(Hplant.B[:, ifnd])
-  pnames = deepcopy(Hplant.inputnames[ifnd])
+  # initialize the G and Gd 'plants'
+  G = deepcopy(plant)
+  Gd = deepcopy(plant)
 
-  if return_new_model:
-    Hplant_new = deepcopy(Hplant)
-  else:
-    Hplant_new = Hplant
+  modify_plant(G, 'inputs', remove=idists)
+  modify_plant(Gd, 'inputs', remove=iconts)
 
-  modify_plant(Hplant_new, 'inputs', remove=ifnd)
-
-  outs = (P, pnames)
-  if return_new_model:
-    outs = (*outs, Hplant_new)
-
-  return outs
+  return G, Gd
 
 
 def load_models(files, dirname='', states_to_ignore=[], vwinds_wanted=None, azis_wanted=None,
@@ -1587,19 +1700,19 @@ def _handle_iin_iout(iins, iouts, block):
 
 
 def plot_bode(Hplant, input_=0, output=0, omega_limits=[1e-3, 1e2], omega_num=1e4, dB=True,
-              Hz=True, show_margins=False, show_nyquist=False, fig=None, axs=None, color='b',
+              Hz=True, show_margins=False, show_nyquist=False, axs=None, color='b',
               linestyle='-', show_legend=True, label=None, figname="Bode plots",
-              suptitle=None):
+              dress_up_axes=True):
   """
   plot a single bode plot
   """
   iin, iout = _handle_iin_iout(input_, output, Hplant)
 
-  if figname is None:
-    figname = suptitle
+  iin = iin.item()
+  iout = iout.item()
 
   # plot all possible transfer functions
-  if fig is None:
+  if axs is None:
     fig = plt.figure(aux.figname(figname))
     if show_nyquist:
       gs = fig.add_gridspec(2, 2)
@@ -1607,7 +1720,11 @@ def plot_bode(Hplant, input_=0, output=0, omega_limits=[1e-3, 1e2], omega_num=1e
       gs = fig.add_gridspec(2, 1)
     axs = [fig.add_subplot(gs[0, 0])]
     axs.append(fig.add_subplot(gs[1, 0], sharex=axs[0]))
-    fig.suptitle(suptitle, fontweight="bold", fontsize=12)
+
+    if show_nyquist:
+      axs.append(fig.add_subplot(gs[:, 1]))
+
+  if dress_up_axes:
     axs[0].set_title("Gain/Magnitude")
     if Hz:
       axs[0].set_xlabel("Frequency [Hz]")
@@ -1626,7 +1743,6 @@ def plot_bode(Hplant, input_=0, output=0, omega_limits=[1e-3, 1e2], omega_num=1e
     axs[1].axhline(-180, color='k', linestyle=':')
 
     if show_nyquist:
-      axs.append(fig.add_subplot(gs[:, 1]))
       axs[2].set_title("Nyquist plot")
       axs[2].grid(True)
       # plot nyquist
@@ -1670,38 +1786,39 @@ def plot_bode(Hplant, input_=0, output=0, omega_limits=[1e-3, 1e2], omega_num=1e
   gm_, pm_, sm_, wg_, wp_, ws_ = cm.stability_margins(Hsiso_this, returnall=True)
 
   # plot gain margins
-  for wg__, gm__ in zip(wg_, gm_):
-    gmdb = cm.mag2db(gm__)
-    if Hz:
-      wg = w2f(wg__)
-    else:
-      wg = wg__
-    if omega_limits[0] <= wg <= omega_limits[1]:
-      axs[0].plot(wg*np.array([1., 1.]), [0., -gmdb], ':', color=color)
-      axs[0].text(wg, -gmdb/2, "{:0.0f}".format(-gmdb), ha='center', va='center',
-                  fontsize=7, fontweight='bold', color=color, backgroundcolor='w',
-                  bbox={'pad': 0.1, 'color': 'w'})
+  if show_margins:
+    for wg__, gm__ in zip(wg_, gm_):
+      gmdb = cm.mag2db(gm__)
+      if Hz:
+        wg = w2f(wg__)
+      else:
+        wg = wg__
+      if omega_limits[0] <= wg <= omega_limits[1]:
+        axs[0].plot(wg*np.array([1., 1.]), [0., -gmdb], ':', color=color)
+        axs[0].text(wg, -gmdb/2, "{:0.0f}".format(-gmdb), ha='center', va='center',
+                    fontsize=7, fontweight='bold', color=color, backgroundcolor='w',
+                    bbox={'pad': 0.1, 'color': 'w'})
 
-  # phase margins
-  for wp__, pm__ in zip(wp_, pm_):
-    # check if it is relative to -180 or +180
-    if Hz:
-      wp = wp__/(2*np.pi)
-    else:
-      wp = wp__
+    # phase margins
+    for wp__, pm__ in zip(wp_, pm_):
+      # check if it is relative to -180 or +180
+      if Hz:
+        wp = wp__/(2*np.pi)
+      else:
+        wp = wp__
 
-    if omega_limits[0] <= wp <= omega_limits[1]:
-      iomega = aux.get_closest_index(wp__, omegas, suppress_warnings=True)
+      if omega_limits[0] <= wp <= omega_limits[1]:
+        iomega = aux.get_closest_index(wp__, omegas, suppress_warnings=True)
 
-      # offset = -(nof_folds*2. + 1.)*180.
-      ytxt = (phs[iomega] - phs[iomega])/2.
-      ypos = [np.rad2deg(phs[iomega]), -180.]
+        # offset = -(nof_folds*2. + 1.)*180.
+        ytxt = (phs[iomega] - phs[iomega])/2.
+        ypos = [np.rad2deg(phs[iomega]), -180.]
 
-      ytxt = np.mean(ypos)
-      axs[1].plot(wp*np.array([1., 1.]), ypos, ':', color=color)
-      axs[1].text(wp, ytxt, "{:0.0f}".format(pm__),
-                  ha='center', va='center', fontsize=7, fontweight='bold', color=color,
-                  bbox={'pad': 0.1, 'color': 'w'})
+        ytxt = np.mean(ypos)
+        axs[1].plot(wp*np.array([1., 1.]), ypos, ':', color=color)
+        axs[1].text(wp, ytxt, "{:0.0f}".format(pm__),
+                    ha='center', va='center', fontsize=7, fontweight='bold', color=color,
+                    bbox={'pad': 0.1, 'color': 'w'})
 
   if show_nyquist:
     nqi, nqq, nqf = cm.nyquist_plot(Hsiso_this, omega=omegas, Plot=False)
@@ -1718,12 +1835,12 @@ def plot_bode(Hplant, input_=0, output=0, omega_limits=[1e-3, 1e2], omega_num=1e
 
   plt.show(block=False)
 
-  return fig, axs
+  return axs
 
 
 def plot_single_plant_bodes(Hplant, inputs=None, outputs=None, omega_limits=[1e-3, 1e2],
                             omega_num=1e5, dB=True, Hz=True, show_margins=False,
-                            show_nyquist=False, fig=None, axs=None, colors=None,
+                            show_nyquist=False, axs=None, colors=None,
                             show_legend=True, figname=None, suptitle="Bode plots"):
   """
   generate all bode plots for a plant
@@ -1747,12 +1864,14 @@ def plot_single_plant_bodes(Hplant, inputs=None, outputs=None, omega_limits=[1e-
   for iin in inputs:
     for iout in outputs:
       iplot += 1
-      (fig, axs) = plot_bode(Hplant, iin, iout, omega_limits=omega_limits,
-                             omega_num=np.int_(omega_num), dB=dB, Hz=Hz, show_margins=show_margins,
-                             show_nyquist=show_nyquist, fig=fig, axs=axs,
-                             color=colors[iplot], linestyle='-', show_legend=show_legend,
-                             figname=figname, suptitle=suptitle)
+      axs = plot_bode(Hplant, input_=iin, output=iout, omega_limits=omega_limits,
+                      omega_num=np.int_(omega_num), dB=dB, Hz=Hz, show_margins=show_margins,
+                      show_nyquist=show_nyquist, axs=axs,
+                      color=colors[iplot], linestyle='-', show_legend=show_legend,
+                      figname=figname)
 
+  fig = axs[0].figure
+  fig.suptitle(suptitle, fontweight='bold', fontsize=12)
   return fig, axs
 
 
@@ -1962,7 +2081,7 @@ def load_state_space_model_file(filename, dirname='.', states_to_ignore=[], dt=0
       Hplant.ref_rotor_speed = ssmat['RotorSpeeds'][0, ivw]
       Hplant.ref_pitch = ssmat['PitchAngles'][ivw, iazi]
       Hplant.ref_generator_torque = ssmat['NomTorqueArray'][ivw, iazi]
-
+      Hplant.gearbox_ratio = ssmat['Gbx'].item()
       Hplant.dirname = dirname
       Hplant.filename = filename
 
@@ -2075,7 +2194,7 @@ def _loadpj(items=None, dirname=None, filenames=None):
     items_to_load = items_to_load0.tolist()
   else:
     if isinstance(items, str):
-      items = [items,]
+      items = [items, ]
 
     items_to_load = []
     for item in items:
@@ -2150,12 +2269,16 @@ def bandpass(f0, damping_ratio, gain=1., dt=0, force_statespace=True):
   return out
 
 
-def low_pass_filter(fc, gain=1., force_statespace=True, dt=0.):
+def low_pass_filter(fc, gain=1., damping_ratio=1., order=1, force_statespace=True, dt=0.):
   """
   define a n-th order low pass filter
   """
   omc = f2w(fc)
-  Hlp = cm.tf([gain], [1./omc, 1.])
+  if order == 1:
+    Hlp = cm.tf([gain], [1./omc, 1.])
+  elif order == 2:
+    Hlp = cm.tf([gain*(omc**2)], [1., 2.*damping_ratio*omc, omc**2])
+
   if force_statespace:
     Hlp = cm.tf2ss(Hlp)
 
@@ -2231,6 +2354,61 @@ def pidpar(Kp, **kwargs):
   return Hpid
 
 
+def minreal(plant, tol=None, inplace=True, verbose=True):
+  """
+  wrapper around control.minreal which keeps properties of the BlockStateSpace model like
+  inputnames and outputnames
+  """
+  if inplace:
+    plant_ = plant
+  else:
+    plant_ = deepcopy(plant)
+
+  plantm = cm.minreal(plant_, tol=tol, verbose=verbose)
+
+  plant_.A = deepcopy(plantm.A)
+  plant_.B = deepcopy(plantm.B)
+  plant_.C = deepcopy(plantm.C)
+  plant_.D = deepcopy(plantm.D)
+  plant_.states = deepcopy(plantm.states)
+
+  add_generic_labels(plant_, force='states', inplace=True)
+
+  return plant_
+
+
+def pzmap(plant, ax=None, do_sisos=True, do_mimo=True, show_legend=True, title=None):
+  """
+  wrapper around the control.pzmap function which plots the poles and zeros
+  """
+  if ax is None:
+    fig, ax = plt.subplots(1, 1, num=aux.figname("pole/zero analysis"))
+
+  if title is not None:
+    ax.set_title(title, fontsize=10, fontweight='bold')
+  # plot all poles and zeros for all SISO's and for the minreal mimo
+  nof_plots = plant.inputs*plant.outputs
+  colors = aux.jetmod(nof_plots, 'vector', bright=True)
+  for iin in range(plant.inputs):
+    for iout in range(plant.outputs):
+      label = labelmaker(plant, input_=iin, max_char=80, prepend_tag=False)
+      iplot = iin*plant.outputs + iout
+      color = colors[iplot, :]
+      ps, zs = cm.pzmap(make_siso(plant, iin, iout), Plot=False)
+      ax.plot(np.real(ps), np.imag(ps), 'x', color=color, label=label, alpha=0.5)
+      ax.plot(np.real(zs), np.imag(zs), 'o', color=color, mfc='none', alpha=0.5)
+  if do_mimo:
+    Ps, Zs = cm.pzmap(plant, Plot=False)
+    ax.plot(np.real(Ps), np.imag(Ps), 'kx', mew=2, markersize=10, zorder=-1)
+    ax.plot(np.real(Zs), np.imag(Zs), 'ko', mfc='none', mew=2, markersize=10, zorder=-1)
+
+  if show_legend:
+    ax.legend(fontsize=6)
+  plt.show(block=False)
+
+  return ax
+
+
 def pid(Kp, N=100, form='ideal', force_statespace=True, dt=0., **kwargs):
   """
   PID controller according to the ideal scheme:
@@ -2246,8 +2424,7 @@ def pid(Kp, N=100, form='ideal', force_statespace=True, dt=0., **kwargs):
   elif form.startswith("parallel"):
     Hpid = pidpar(Kp, **kwargs)
   else:
-    raise NotImplementedError("Other forms than `standard`, and `parallel` are not" +
-                              " implemented yet")
+    raise NotImplementedError("Other forms than `standard`, and `parallel` are not implemented")
 
   Hpid.dt = dt
   if force_statespace:
@@ -2270,6 +2447,34 @@ def w2f(omega):
   return omega/(2*np.pi)
 
 
+def w2n(omega):
+  """
+  convert the rad/s units to rpm
+  """
+  return f2n(w2f(omega))
+
+
+def n2w(rpm):
+  """
+  convert the rotational speed to rad/s from rpm
+  """
+  return f2w(n2f(rpm))
+
+
+def f2n(freq):
+  """
+  convert frequency in Hz to rpm
+  """
+  return freq*60.
+
+
+def n2f(rpm):
+  """
+  convert a angular frequency in rpm to Hz
+  """
+  return rpm/60.
+
+
 def split_s_plane_coords(s_coords, Hz=False):
   """
   split any s plane coordinates into dcay and frequency
@@ -2282,9 +2487,35 @@ def split_s_plane_coords(s_coords, Hz=False):
   return aux.split_complex(s_coords, sfx=1, sfy=sfy)
 
 
-def time_response(response_type, sys, inputs=None, outputs=None, **kwargs):
+def time_response(response_type, sys, inputs=None, outputs=None, squeeze=True, **kwargs):
   """
   wrapper around the impulse_response and step_response functions in the control module
+
+  Arguments:
+  ----------
+  response_type : ["step" | "forced" | "impulse"]
+                  The time response type
+  sys : StateSpace Object
+        The state-space object for which the time response must be calculated
+  inputs : [ None | str | int | array_like of str or int ], default=None
+           The inputs which are to be perturbed. Can be a single one or a set. Note that the value
+           None will just perturb all inputs
+  outputs : [ None | int | str | array-like of str or int], default=None
+            The outputs which have to be calculated and returned. Note that None will return all
+            outputs
+  squeeze : bool, default=True
+            Whether to squeeze the outputs
+  **kwargs : dict
+             The keyword arguments which are passed to the functions in the `control` module for
+             which this wrapper is made
+
+  Returns:
+  --------
+  datamat, iins, iouts : array, array, array, array
+                         datamat: The output values in a structured array
+                         ts: The time steps used
+                         iins: the indices of the inputs used
+                         iouts: the indices of the outputs used
   """
   class TimeResponseTypeError(Exception):
     pass
@@ -2299,14 +2530,19 @@ def time_response(response_type, sys, inputs=None, outputs=None, **kwargs):
     use_iokwargs = False
     # prepare some forced response variables
     U = kwargs['U']
+    nof_inputs = sys.inputs
     if sys.isctime:
       ts = kwargs['T']
+      Uall = np.zeros((nof_inputs, ts.size), dtype=float)
       if np.isscalar(U):
-        U = np.ones_like(ts, dtype=float)*U
+        Uall[iins, :] = np.ones_like(ts, dtype=float)*U
       elif U.size == 1:
-        U *= np.ones_like(ts, dtype=float)
+        Uall[iins, :] *= np.ones_like(ts, dtype=float)
+      else:
+        Uall[iins, :] = U
 
-    func = partial(cm.forced_response, U=U)
+    kwargs['U'] = Uall
+    func = cm.forced_response
   else:
     raise TimeResponseTypeError("The time response type ({}) is not defined".format(response_type))
 
@@ -2315,12 +2551,21 @@ def time_response(response_type, sys, inputs=None, outputs=None, **kwargs):
     if use_iokwargs:
       kwargs['input'] = np.int(iin)
     ts, ydata = func(sys, **kwargs)[:2]
+    if iouts.size == 1:
+      ydata = ydata.reshape(1, -1)
+    # make it into a 2D array
 
+    # initialize datamat
     if _iin == 0:
       datamat = np.empty((iins.size, iouts.size, ts.size), dtype=np.float)
+
+    # add data to datamat
     datamat[_iin, :, :] = ydata[iouts, :]
 
-  return ts, datamat, iins, iouts
+  if squeeze:
+    datamat = datamat.squeeze()
+
+  return datamat, ts, iins, iouts
 
 
 def labelmaker(sys, input_=None, output=None, max_char=np.inf, gluestr=" -> ", what2keep='begin',
@@ -2398,7 +2643,7 @@ def negate_inputs(sys, inputs):
   return sysi
 
 
-def pole_contributions(sys, plot=True, thres=5.):
+def pole_contributions(sys, plot=True, thres=1.):
   """
   determine the pole contributions for a plant
   """
@@ -2408,27 +2653,38 @@ def pole_contributions(sys, plot=True, thres=5.):
   # keep 1 pole per conjugate pair (Im > 0)
   eigvals_ = eigvals[tf_display]
   eigvecs_ = eigvecs[:, tf_display]
-  nof_poles_to_show = eigvals_.size
+  nof_poles_to_show_ = eigvals_.size
 
   # calculate criticalities (for ordering)
-  dcays = np.real(eigvals_)
-  freqs = w2f(np.imag(eigvals_))
-  dampratios = np.cos(np.arctan(f2w(freqs)/dcays))
-  criticalities = np.abs(dcays)*dampratios
-  isort_crit = np.argsort(criticalities)
+  dcays_ = np.real(eigvals_)
+  # find which poles are unstable
+  is_unstables_ = (dcays_ > 0.).reshape(-1)
+
+  freqs_ = w2f(np.imag(eigvals_))
+  dampratios_ = np.cos(np.arctan(f2w(freqs_)/dcays_))
+
+  # sorting based on criticalities
+  # criticalities_ = dcays_*dampratios_
+  # criticalities_[np.isnan(criticalities_)] = 0.
+  # isort_crit = np.argsort(criticalities_)[-1::-1]
+  isort_crit = np.r_[:nof_poles_to_show_]
+  # asdf
+  is_unstables__ = is_unstables_[isort_crit]
 
   # initialize labels for displaying matrix via improveshow
   if plot:
     clabels = [name + " - {:d}".format(ielm) for ielm, name in enumerate(sys.statenames)]
+    # clabels = [("$\\mathbf{(!!!)}$"*is_unstable + clabel) for is_unstable, clabel in
+    #            zip(is_unstables__, clabels)]
     rlabels = []
 
-  contribution_matrix = np.zeros((nof_poles_to_show, sys.states), dtype=float)
+  contribution_matrix = np.zeros((nof_poles_to_show_, sys.states), dtype=float)
   for ipole, iisort_crit in enumerate(isort_crit):
     # make row label (pole label)
     if plot:
-      rlabels.append("f={:0.0f} mHz, $\\zeta$={:0.3f}, cri={:.1g} - {:d}".
-                     format(1e3*freqs[iisort_crit], dampratios[iisort_crit],
-                            criticalities[iisort_crit], ipole))
+      rlabels.append("$\\sigma$={:g}, f={:g} Hz, $\\zeta$={:g} - {:d}".
+                     format(dcays_[iisort_crit], freqs_[iisort_crit], dampratios_[iisort_crit],
+                            ipole))
 
     # calc contributions of physical states
     eigvec = np.abs(eigvecs_[:, iisort_crit])
@@ -2436,10 +2692,13 @@ def pole_contributions(sys, plot=True, thres=5.):
 
     isort_contrib = np.argsort(contribs, axis=0)[-1::-1]
     for iisort_contrib in isort_contrib:
-      contribution_matrix[iisort_crit, iisort_contrib] = contribs[iisort_contrib]
+      # contribution_matrix[iisort_crit, iisort_contrib] = contribs[iisort_contrib]
+      contribution_matrix[ipole, iisort_contrib] = contribs[iisort_contrib]
 
-  outs = eigvals_, eigvecs_,contribution_matrix
+  outs = (eigvals_, eigvecs, contribution_matrix)
 
+  rlabels = [is_unstable*"$\\mathbf{<UNSTABLE>}$" + rlabel for is_unstable, rlabel in
+             zip(is_unstables__, rlabels)]
   if plot:
     cmatperc = np.int_(100*contribution_matrix.copy() + 0.5)
     _, ax = aux.improvedshow(cmatperc, cmap='Reds', fmt="{:2d}", show_values=True, clabels=clabels,
@@ -2447,5 +2706,191 @@ def pole_contributions(sys, plot=True, thres=5.):
                              invalid=[-np.inf, thres], title="Pole contributions", aspect='auto')
     outs = (*outs, ax)
 
-  return outs
+  if not plot:
+    return outs
 
+
+def scale_plant(G, max_cont_values=None, max_outp_values=None, Gd=None, max_dist_values=None,
+                inplace=False):
+  """
+  scale the G and Gd plants
+
+  Arguments:
+  ----------
+  G : StateSpace object
+      The state space object of the plant to be scaled (clean plant, excluding disturbances)
+  max_cont_values : dict
+                    If not None. This dict holds the maximum values to be used to scale the data
+                    as keys in a dict. The keys are - partial - strings which identify certain
+                    control inputs. All inputs which are not identified in the dict will
+                    remain unscaled
+  Gd : [ StateSpace object | None ], default=None
+       The state space object of the disturbances to the plant (only disturbances, no controls)
+  max_dist_values : [ dict | None ], default=None
+                    If not None, this is treated the same as *max_cont_values* but now for the
+                    disturbances and the Gd plant
+
+  Returns:
+  --------
+  * nothing is returned, the G and Gd are modified in place *
+  """
+  def _scaling_matrix(maxvaldict, names2search):
+    """
+    helper function that creates and returns a N-by-N scaling matrix
+    """
+    nof_names = names2search.size
+    if maxvaldict is None:
+      D_ = np.ones(nof_names, dtype=float)
+    else:
+      D_ = np.empty(nof_names, dtype=float)
+      for key, maxval in maxvaldict.items():
+        iconts = aux.find_elm_containing_substrs(key, names2search)
+        D_[iconts] = maxval
+
+    return np.diag(D_)
+
+  # check if the plant must be overwritten of newly created
+  if inplace:
+    Gnew = G
+    Gdnew = Gd
+  else:
+    Gnew = deepcopy(G)
+    Gdnew = deepcopy(Gd)
+
+  # -------- (Du) input control scaling matrix ------------------------
+  Dy = _scaling_matrix(max_outp_values, Gnew.outputnames)
+  Du = _scaling_matrix(max_cont_values, Gnew.inputnames)
+  Dd = _scaling_matrix(max_dist_values, Gdnew.inputnames)
+
+  # perform the scaling according to C*inv(sI - A)*B + D and Gscaled = inv(Dy)*G*Du
+  Gnew.C = np.linalg.pinv(Dy)@Gnew.C
+  Gnew.B = Gnew.B@Du
+  Gnew.D = Gnew.D@Du
+
+  # same for disturbances
+  Gdnew.C = np.linalg.pinv(Dy)@Gdnew.C
+  Gdnew.B = Gdnew.B@Dd
+  Gdnew.D = Gdnew.D@Dd
+
+  Gnew.scaling = dict(Du=Du, Dy=Dy)
+  Gdnew.scaling = dict(Du=Du, Dd=Dd)
+
+  return Gnew, Gdnew
+
+
+def clean_plant_numerics(plant, thresval, threstype="rel2max_rowcol", inplace=True):
+  """
+  clean the plant numerics by removing low values from the A, B, C and D matrices
+
+  Arguments:
+  ----------
+  plant : StateSpace object
+          The plant in state-space extended format
+  thresval : numeric
+             The threshold value to use
+  threstype : ['abs' | 'rel2max' | 'rel2max_row' | 'rel2max_col' | 'rel2max_rowcol'],
+          default=rel2max_col
+              The type of thresholding:
+              abs - absolute value
+              rel2max - relative to the maximum per ss matrix
+              rel2max_col - relative to the maximum per column (default)
+              rel2max_row - relative to the maximum per row
+              rel2max_rowcol - relative the maximum per row and column
+  inplace : bool, default=True
+            whether the plant must be overwritten or not
+
+  Returns:
+  --------
+  plant : StateSpace object
+          changed or new plant, depending on *inplace* parameter
+  """
+  def _threshold_ss_matrices(ss, thres, axis):
+    """
+    threshold all 4 matrices
+    """
+    if axis == 'none':
+      Amax = thres
+      Bmax = thres
+      Cmax = thres
+      Dmax = thres
+    else:
+      Amax = ss.A.max(axis=axis)*thres
+      Bmax = ss.B.max(axis=axis)*thres
+      Cmax = ss.C.max(axis=axis)*thres
+      Dmax = ss.D.max(axis=axis)*thres
+
+    ss.A[np.abs(ss.A) < Amax] = 0.
+    ss.B[np.abs(ss.B) < Bmax] = 0.
+    ss.C[np.abs(ss.C) < Cmax] = 0.
+    ss.D[np.abs(ss.D) < Dmax] = 0.
+
+  # handle inplace keyword
+  if not inplace:
+    plant_ = deepcopy(plant)
+  else:
+    plant_ = plant
+
+  # switch based on type
+  if threstype == "abs":
+    _threshold_ss_matrices(plant_, thresval, 'none')
+  elif threstype == "rel2max":
+    _threshold_ss_matrices(plant_, thresval, None)
+  elif threstype == "rel2max_row":
+    _threshold_ss_matrices(plant_, thresval, 1)
+  elif threstype == "rel2max_col":
+    _threshold_ss_matrices(plant_, thresval, 0)
+  elif threstype == "rel2max_rowcol":
+    _threshold_ss_matrices(plant_, 1., 1)
+    _threshold_ss_matrices(plant_, thresval, 0)
+
+  return plant_
+
+
+def remove_useless_states(G, inplace=True):
+  """
+  remove the useless states
+  """
+  if not inplace:
+    G0 = deepcopy(G)
+  else:
+    G0 = G
+
+  # find useless rows and columns in A
+  Acolsum = np.array(G.A).sum(axis=0)
+  Arowsum = np.array(G.A).sum(axis=1)
+  iremAcol = np.argwhere(np.isclose(0., Acolsum)).reshape(-1)
+  iremArow = np.argwhere(np.isclose(0., Arowsum)).reshape(-1)
+
+  # find useless rows in B
+  Browsum = np.array(G.B).sum(axis=1)
+  iremBrow = np.argwhere(np.isclose(0., Browsum)).reshape(-1)
+
+  # find useless columns in C
+  Ccolsum = np.array(G.C).sum(axis=0)
+  iremCcol = np.argwhere(np.isclose(0., Ccolsum)).reshape(-1)
+
+  # combine (intersect) columsn of A and C and rows of A and B
+  iremcol = np.intersect1d(iremAcol, iremCcol)
+  iremrow = np.intersect1d(iremArow, iremBrow)
+
+  # total states to remove is the union of rows and columns to remove
+  irem = np.union1d(iremcol, iremrow)
+
+  # convert this to the states to keep
+  ikeep = np.setdiff1d(np.r_[:G.states], irem)
+
+  # overwrite the matrices A, B and C
+  G0.A = G0.A[ikeep, :]
+  G0.A = G0.A[:, ikeep]
+
+  G0.B = G0.B[ikeep, :]
+
+  G0.C = G0.C[:, ikeep]
+
+  # overwrite the state count and the names to keep
+  G0.states = ikeep.size
+  G0.statenames = G0.statenames[ikeep]
+
+  # output in case not *inplace*
+  if not inplace:
+    return G0
